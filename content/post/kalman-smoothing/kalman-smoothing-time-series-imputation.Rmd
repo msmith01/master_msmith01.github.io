@@ -1,0 +1,143 @@
+---
+authors:
+- admin
+date: "2019-09-22"
+layout: post
+title: "Kalman Smoothing for Time Series Missing Value Imputation"
+subtitle: Using the imputeTS package
+summary: I use the na_kalman function from the imputeTS package to impute randomly generate missing stock prices.
+
+
+categories: [Statistics]
+projects: [Prediction]
+tags: [time-series, missing value imputation, stock prices]
+
+comments: true
+draft: false
+featured: false
+---
+
+
+```{r setup, include = FALSE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I was recently given a task to impute some time series missing values for a prediction problem. Python has the `TSFRESH` package which is pretty well documented but I wanted to apply something using R. I opted for a model from statistics and control theory, called Kalman Smoothing which is available in the `imputeTS` package in R.
+
+I went with smoothing over filtering since the Kalman filter takes a forward pass through the data and uses all the data upto the current time point and can be done in real time. Kalman smoothing **adds** a backward pass through the data and thus uses all the data. I guess it can be considered an extention to filtering.
+
+**Note:** I use stock prices here only for easy time series data collection and to just apply Kalman Smoothing to a time series problem, you cannot build a trading strategy using smoothing for the reason given. You can check out a Kalman Filtering Pairs Trading Strategy [here](https://www.quantstart.com/articles/kalman-filter-based-pairs-trading-strategy-in-qstrader).
+
+#### Download some data:
+
+I just collect some simple data for `Google` and `Walmart`. I end up with 3 parts, the actual observations, the predicted observation and the randomly generated *missing* time series.  
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+library(knitr)
+library(kableExtra)
+library(quantmod)
+library(imputeTS)
+library(Metrics)
+
+symbols <- c("GOOG", "WMT")
+
+myenv <- new.env()
+symnames <- getSymbols(symbols, env = myenv)
+
+li <- eapply(myenv, function(x) x) 
+ts <- do.call(merge, eapply(myenv, Ad)[symnames])
+
+actual <-as.data.frame(ts)
+names(actual) <- paste(symbols, "actual", sep = "_")
+```
+
+#### Actual observations:
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+actual %>%
+  head() %>%
+  kable(caption = "Actual Observations") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+Here I create the 100 random missing values that we want to predcit /impute.
+
+#### Create some NA values:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+ts[sample(nrow(ts), 100), ] <- NA
+names(ts) <- paste(symbols, "missing", sep = "_")
+```
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+ts %>%
+  head() %>%
+  kable(caption = "Data with random missing observations") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+I wrap the `na_kalman` into a function to apply `lapply` which is useful should I want to apply the model to multivariate time series data. That is you might have a data set with many explanatory variables for each time stamp and one or more variables will have missing values. The function should impute across the columns of your data frame.
+
+I use a state space representation of an ARIMA model here but I suggest taking a look at the `auto.arima` model from the `forecast` package for the best model.There is also a model available for a strucutred model fitted by maximum likelihood. I just use a simple ARIMA model for this example. 
+
+#### Run the model
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+# Model 1:
+# Kalman Smoothing missing value imputation in a state space representation of an ARIMA model
+KalmanSmoothing <- function(data){
+  df <- data
+  arima_model <- arima(df[, ], order = c(1, 0, 1))$model
+  KalmanImputation <- na_kalman(df[, ], model = arima_model)
+  return(KalmanImputation)
+}
+
+results <- lapply(ts, KalmanSmoothing)
+results <- as.data.frame(results)
+names(results) <- paste(symbols, "predictions", sep = "_")
+
+ts <- as.data.frame(ts)
+```
+
+
+#### Compute the RMSE for both time series:
+
+I subset the first 10 predictions for each observation but we will have `100` predictions (one for each NA value we randomly generated earlier).
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+final <- cbind(ts, results, actual)
+
+GOOG_error <- subset(final, is.na(GOOG_missing), select = c("GOOG_predictions", "GOOG_actual"))
+```
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+GOOG_error %>%
+  head(10) %>%
+  kable(caption = "Predictions vs Observed") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+#### Print the RMSE for Google
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+rmse(GOOG_error$GOOG_actual, GOOG_error$GOOG_predictions)
+```
+
+#### Apply the same to the Walmart predictions:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+WMT_error <- subset(final, is.na(WMT_missing), select = c("WMT_predictions", "WMT_actual"))
+```
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+WMT_error %>%
+  head(10) %>%
+  kable(caption = "Predictions vs Observed") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+#### Print the RMSE for Walmart
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+rmse(WMT_error$WMT_actual, WMT_error$WMT_predictions)
+``` 
+
+

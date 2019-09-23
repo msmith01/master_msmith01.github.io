@@ -1,0 +1,40 @@
+---
+authors:
+- admin
+
+date: "2019-09-21"
+layout: post
+title: Sending nohup commands to R scripts
+subtitle: How I use nohup commands for time consuming R projects
+summary: I briefly discuss how I use nohup commands to run R files, save the errors and outputs to file
+
+categories: [AWS]
+projects: [Misc]
+tags: [AWS, RStudio, nohup]
+
+comments: true
+draft: false
+featured: false
+---
+
+
+
+<p>There are times when I am connected remotely to an RStudio server and I want to run a time-consuming script which might take a few hours or days. As part of my PhD I had to calculate a number of large distance matrices which took considerable time since the data was quite large. Another script I developed was to download and parse 150,000 documents. It took a week to download and parse them and during this time I lost connection to the server a few times causing the code to break.</p>
+<p>The free version of RStudio only allows one session open at any time and leaving the script running for a week meant that I couldn’t keep coding in R! Many of the problems I faced actually didn’t require RStudio since the models were either downloading and storing data or calculating matrices so just an R connection would be sufficient. So, I wanted to find a way to run an R file without logging off or without any interruption. I come across the <strong>nohup</strong> command in Unix operating systems.</p>
+<p>The <strong>nohup</strong> or <strong>no hang-up</strong> command can execute a script and tell the system to continue running it even if the session is disconnected.
+I use it in the following way, once I have developed a model <em>myRFile.R</em> using RStudio, verified it works on a sample of the data etc. and saved it into a folder called <em>myFolder</em>. I can go to the terminal (which I usually connect to using PuTTY) and run the following:</p>
+<pre><code>nohup Rscript ./myFolder/myRFile.R &lt;/dev/null&gt;myRFile_Output.out 2&gt;myRFile_ErrorMessages.err &amp;</code></pre>
+<p>This will run the .R file and store any output usually printed to the console to a text file <em>myRFile_Ouput.out</em> and any error messages to another text file <em>myRFile_ErrorMessages.err</em> where we can check on the progress whilst the script is running. I usually add progress messages in side the function such as:</p>
+<pre class="r"><code>foo &lt;- function(x){
+  print(paste(&quot;Year&quot;, x, &quot;has started &quot;, Sys.time()))
+  
+  do.something
+  
+  print(paste(&quot;Year&quot;, x, &quot;has ended &quot;, Sys.time()))
+  return(x)
+}
+
+years &lt;- seq(from = &quot;2005&quot;, to = &quot;2018&quot;)
+sapply(years, foo)  </code></pre>
+<p>Which prints out the progress of the function to <em>myRFile_Output.out</em>, i.e. if I needed to apply a function across years.</p>
+<p>By running <em>nohup</em> commands from the terminal allows me to free up my RStudio for other tasks also.</p>

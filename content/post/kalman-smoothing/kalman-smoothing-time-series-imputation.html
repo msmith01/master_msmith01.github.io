@@ -1,0 +1,502 @@
+---
+authors:
+- admin
+date: "2019-09-22"
+layout: post
+title: "Kalman Smoothing for Time Series Missing Value Imputation"
+subtitle: Using the imputeTS package
+summary: I use the na_kalman function from the imputeTS package to impute randomly generate missing stock prices.
+
+
+categories: [Statistics]
+projects: [Prediction]
+tags: [time-series, missing value imputation, stock prices]
+
+comments: true
+draft: false
+featured: false
+---
+
+<script src="/rmarkdown-libs/kePrint/kePrint.js"></script>
+
+
+<p>I was recently given a task to impute some time series missing values for a prediction problem. Python has the <code>TSFRESH</code> package which is pretty well documented but I wanted to apply something using R. I opted for a model from statistics and control theory, called Kalman Smoothing which is available in the <code>imputeTS</code> package in R.</p>
+<p>I went with smoothing over filtering since the Kalman filter takes a forward pass through the data and uses all the data upto the current time point and can be done in real time. Kalman smoothing <strong>adds</strong> a backward pass through the data and thus uses all the data. I guess it can be considered an extention to filtering.</p>
+<p><strong>Note:</strong> I use stock prices here only for easy time series data collection and to just apply Kalman Smoothing to a time series problem, you cannot build a trading strategy using smoothing for the reason given. You can check out a Kalman Filtering Pairs Trading Strategy <a href="https://www.quantstart.com/articles/kalman-filter-based-pairs-trading-strategy-in-qstrader">here</a>.</p>
+<div id="download-some-data" class="section level4">
+<h4>Download some data:</h4>
+<p>I just collect some simple data for <code>Google</code> and <code>Walmart</code>. I end up with 3 parts, the actual observations, the predicted observation and the randomly generated <em>missing</em> time series.</p>
+<pre class="r"><code>library(knitr)
+library(kableExtra)
+library(quantmod)
+library(imputeTS)
+library(Metrics)
+
+symbols &lt;- c(&quot;GOOG&quot;, &quot;WMT&quot;)
+
+myenv &lt;- new.env()
+symnames &lt;- getSymbols(symbols, env = myenv)
+
+li &lt;- eapply(myenv, function(x) x) 
+ts &lt;- do.call(merge, eapply(myenv, Ad)[symnames])
+
+actual &lt;-as.data.frame(ts)
+names(actual) &lt;- paste(symbols, &quot;actual&quot;, sep = &quot;_&quot;)</code></pre>
+</div>
+<div id="actual-observations" class="section level4">
+<h4>Actual observations:</h4>
+<table class="table table-striped table-hover table-condensed table-responsive" style="font-size: 12px; margin-left: auto; margin-right: auto;">
+<caption style="font-size: initial !important;">
+<span id="tab:unnamed-chunk-2">Table 1: </span>Actual Observations
+</caption>
+<thead>
+<tr>
+<th style="text-align:left;">
+</th>
+<th style="text-align:right;">
+GOOG_actual
+</th>
+<th style="text-align:right;">
+WMT_actual
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left;">
+2007-01-03
+</td>
+<td style="text-align:right;">
+232.9220
+</td>
+<td style="text-align:right;">
+35.17886
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-01-04
+</td>
+<td style="text-align:right;">
+240.7277
+</td>
+<td style="text-align:right;">
+35.34902
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-01-05
+</td>
+<td style="text-align:right;">
+242.6853
+</td>
+<td style="text-align:right;">
+35.06050
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-01-08
+</td>
+<td style="text-align:right;">
+240.8871
+</td>
+<td style="text-align:right;">
+34.77196
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-01-09
+</td>
+<td style="text-align:right;">
+241.8435
+</td>
+<td style="text-align:right;">
+35.06050
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-01-10
+</td>
+<td style="text-align:right;">
+243.8161
+</td>
+<td style="text-align:right;">
+34.97911
+</td>
+</tr>
+</tbody>
+</table>
+<p>Here I create the 100 random missing values that we want to predcit /impute.</p>
+</div>
+<div id="create-some-na-values" class="section level4">
+<h4>Create some NA values:</h4>
+<pre class="r"><code>ts[sample(nrow(ts), 100), ] &lt;- NA
+names(ts) &lt;- paste(symbols, &quot;missing&quot;, sep = &quot;_&quot;)</code></pre>
+<table class="table table-striped table-hover table-condensed table-responsive" style="font-size: 12px; margin-left: auto; margin-right: auto;">
+<caption style="font-size: initial !important;">
+<span id="tab:unnamed-chunk-4">Table 2: </span>Data with random missing observations
+</caption>
+<thead>
+<tr>
+<th style="text-align:right;">
+GOOG_missing
+</th>
+<th style="text-align:right;">
+WMT_missing
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:right;">
+232.9220
+</td>
+<td style="text-align:right;">
+35.17886
+</td>
+</tr>
+<tr>
+<td style="text-align:right;">
+240.7277
+</td>
+<td style="text-align:right;">
+35.34902
+</td>
+</tr>
+<tr>
+<td style="text-align:right;">
+242.6853
+</td>
+<td style="text-align:right;">
+35.06050
+</td>
+</tr>
+<tr>
+<td style="text-align:right;">
+240.8871
+</td>
+<td style="text-align:right;">
+34.77196
+</td>
+</tr>
+<tr>
+<td style="text-align:right;">
+241.8435
+</td>
+<td style="text-align:right;">
+35.06050
+</td>
+</tr>
+<tr>
+<td style="text-align:right;">
+243.8161
+</td>
+<td style="text-align:right;">
+34.97911
+</td>
+</tr>
+</tbody>
+</table>
+<p>I wrap the <code>na_kalman</code> into a function to apply <code>lapply</code> which is useful should I want to apply the model to multivariate time series data. That is you might have a data set with many explanatory variables for each time stamp and one or more variables will have missing values. The function should impute across the columns of your data frame.</p>
+<p>I use a state space representation of an ARIMA model here but I suggest taking a look at the <code>auto.arima</code> model from the <code>forecast</code> package for the best model.There is also a model available for a strucutred model fitted by maximum likelihood. I just use a simple ARIMA model for this example.</p>
+</div>
+<div id="run-the-model" class="section level4">
+<h4>Run the model</h4>
+<pre class="r"><code># Model 1:
+# Kalman Smoothing missing value imputation in a state space representation of an ARIMA model
+KalmanSmoothing &lt;- function(data){
+  df &lt;- data
+  arima_model &lt;- arima(df[, ], order = c(1, 0, 1))$model
+  KalmanImputation &lt;- na_kalman(df[, ], model = arima_model)
+  return(KalmanImputation)
+}
+
+results &lt;- lapply(ts, KalmanSmoothing)
+results &lt;- as.data.frame(results)
+names(results) &lt;- paste(symbols, &quot;predictions&quot;, sep = &quot;_&quot;)
+
+ts &lt;- as.data.frame(ts)</code></pre>
+</div>
+<div id="compute-the-rmse-for-both-time-series" class="section level4">
+<h4>Compute the RMSE for both time series:</h4>
+<p>I subset the first 10 predictions for each observation but we will have <code>100</code> predictions (one for each NA value we randomly generated earlier).</p>
+<pre class="r"><code>final &lt;- cbind(ts, results, actual)
+
+GOOG_error &lt;- subset(final, is.na(GOOG_missing), select = c(&quot;GOOG_predictions&quot;, &quot;GOOG_actual&quot;))</code></pre>
+<table class="table table-striped table-hover table-condensed table-responsive" style="font-size: 12px; margin-left: auto; margin-right: auto;">
+<caption style="font-size: initial !important;">
+<span id="tab:unnamed-chunk-7">Table 3: </span>Predictions vs Observed
+</caption>
+<thead>
+<tr>
+<th style="text-align:left;">
+</th>
+<th style="text-align:right;">
+GOOG_predictions
+</th>
+<th style="text-align:right;">
+GOOG_actual
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left;">
+2007-02-07
+</td>
+<td style="text-align:right;">
+234.7555
+</td>
+<td style="text-align:right;">
+234.1274
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-02-13
+</td>
+<td style="text-align:right;">
+230.1927
+</td>
+<td style="text-align:right;">
+228.6928
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-04-19
+</td>
+<td style="text-align:right;">
+238.7316
+</td>
+<td style="text-align:right;">
+234.9444
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-05-31
+</td>
+<td style="text-align:right;">
+248.8202
+</td>
+<td style="text-align:right;">
+248.0253
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-08-13
+</td>
+<td style="text-align:right;">
+255.1383
+</td>
+<td style="text-align:right;">
+256.7875
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-08-28
+</td>
+<td style="text-align:right;">
+255.5769
+</td>
+<td style="text-align:right;">
+252.2545
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-09-04
+</td>
+<td style="text-align:right;">
+259.7935
+</td>
+<td style="text-align:right;">
+261.5945
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-11-02
+</td>
+<td style="text-align:right;">
+355.8694
+</td>
+<td style="text-align:right;">
+354.2970
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2008-04-02
+</td>
+<td style="text-align:right;">
+229.3533
+</td>
+<td style="text-align:right;">
+231.9805
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2008-04-24
+</td>
+<td style="text-align:right;">
+271.6097
+</td>
+<td style="text-align:right;">
+270.5061
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div id="print-the-rmse-for-google" class="section level4">
+<h4>Print the RMSE for Google</h4>
+<pre class="r"><code>rmse(GOOG_error$GOOG_actual, GOOG_error$GOOG_predictions)</code></pre>
+<pre><code>## [1] 4.99637</code></pre>
+</div>
+<div id="apply-the-same-to-the-walmart-predictions" class="section level4">
+<h4>Apply the same to the Walmart predictions:</h4>
+<pre class="r"><code>WMT_error &lt;- subset(final, is.na(WMT_missing), select = c(&quot;WMT_predictions&quot;, &quot;WMT_actual&quot;))</code></pre>
+<table class="table table-striped table-hover table-condensed table-responsive" style="font-size: 12px; margin-left: auto; margin-right: auto;">
+<caption style="font-size: initial !important;">
+<span id="tab:unnamed-chunk-10">Table 4: </span>Predictions vs Observed
+</caption>
+<thead>
+<tr>
+<th style="text-align:left;">
+</th>
+<th style="text-align:right;">
+WMT_predictions
+</th>
+<th style="text-align:right;">
+WMT_actual
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left;">
+2007-02-07
+</td>
+<td style="text-align:right;">
+35.83123
+</td>
+<td style="text-align:right;">
+35.94089
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-02-13
+</td>
+<td style="text-align:right;">
+35.38426
+</td>
+<td style="text-align:right;">
+35.49700
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-04-19
+</td>
+<td style="text-align:right;">
+36.31024
+</td>
+<td style="text-align:right;">
+35.93453
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-05-31
+</td>
+<td style="text-align:right;">
+36.10167
+</td>
+<td style="text-align:right;">
+35.54866
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-08-13
+</td>
+<td style="text-align:right;">
+33.56999
+</td>
+<td style="text-align:right;">
+34.48070
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-08-28
+</td>
+<td style="text-align:right;">
+33.00792
+</td>
+<td style="text-align:right;">
+32.57556
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-09-04
+</td>
+<td style="text-align:right;">
+32.30600
+</td>
+<td style="text-align:right;">
+32.50051
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2007-11-02
+</td>
+<td style="text-align:right;">
+33.08051
+</td>
+<td style="text-align:right;">
+33.16853
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2008-04-02
+</td>
+<td style="text-align:right;">
+41.24560
+</td>
+<td style="text-align:right;">
+41.25630
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+2008-04-24
+</td>
+<td style="text-align:right;">
+43.38140
+</td>
+<td style="text-align:right;">
+43.52140
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div id="print-the-rmse-for-walmart" class="section level4">
+<h4>Print the RMSE for Walmart</h4>
+<pre class="r"><code>rmse(WMT_error$WMT_actual, WMT_error$WMT_predictions)</code></pre>
+<pre><code>## [1] 0.5270424</code></pre>
+</div>

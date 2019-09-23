@@ -1,0 +1,337 @@
+---
+title: Fundamental Financial Ratios in R
+author: ~
+date: '2019-09-22'
+slug: fundamental-financial-ratios-in-r
+categories: []
+tags: []
+subtitle: 'Computing a series of financial ratios colleted from Yahoo Finance and analysing the results'
+summary: 'An analysis of company financial statements: Book-Value-Equity, EBITDA, Enterprise Value, Market-Book, DuPont anaysis. '
+authors: []
+lastmod: '2019-09-22T19:41:31+02:00'
+featured: no
+image:
+  caption: ''
+  focal_point: ''
+  preview_only: no
+projects: []
+
+output:
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include = FALSE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(kableExtra)
+library(tidyquant)
+library(directlabels)
+library(tibble)
+library(tidyr)
+library(quantmod)
+```
+
+I developed a model to collect financial information from Yahoo Finance, I wanted to use this model to understand a little better how to analyse comanies, what ratios are important and to see how companies performances differ from each other.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+
+# A function to collect fundamental data from Yahoo finance (Income Statement, Balance Sheet and Cash Flow statements, just skip past this part.)
+
+getFin <- function(stock){
+  if ("rvest" %in% installed.packages()) {
+    library(rvest)
+    }else{
+      install.packages("rvest")
+      library(rvest)
+      }
+  for (i in 1:length(stock)) {
+    tryCatch(
+      {
+        # Collect the Income Statement data
+        link <- "https://finance.yahoo.com/quote/"
+        link <- paste0(link, stock[i], "/financials?p=", stock[i])
+        wahis.session <- html_session(link)
+        p <- wahis.session %>%
+          html_nodes(xpath = '//*[@id="Col1-1-Financials-Proxy"]/section/div[3]/table')%>%
+          html_table(fill = TRUE)
+        IncomeStatement <- p[[1]]
+        colnames(IncomeStatement) <- paste(IncomeStatement[1,])
+        IncomeStatement <- IncomeStatement[-c(1,5,12,20,25),]
+        names_row <- paste(IncomeStatement[,1])
+        IncomeStatement <- IncomeStatement[,-1]
+        IncomeStatement <- apply(IncomeStatement, 2, function(x){gsub(",","",x)})
+        IncomeStatement <- as.data.frame(apply(IncomeStatement, 2, as.numeric))
+        rownames(IncomeStatement) <- paste(names_row)
+        temp1 <- IncomeStatement
+        
+        # Collect the Balance Sheet data
+        link <- "https://finance.yahoo.com/quote/"
+        link <- paste0(link, stock[i],"/balance-sheet?p=", stock[i])
+        wahis.session <- html_session(link)
+        p <- wahis.session %>%
+          html_nodes(xpath = '//*[@id="Col1-1-Financials-Proxy"]/section/div[3]/table')%>%
+          html_table(fill = TRUE)
+        BalanceSheet <- p[[1]]
+        colnames(BalanceSheet) <- BalanceSheet[1,]
+        BalanceSheet <- BalanceSheet[-c(1,2,17,28),]
+        names_row <- BalanceSheet[,1]
+        BalanceSheet <- BalanceSheet[,-1]
+        BalanceSheet <- apply(BalanceSheet, 2, function(x){gsub(",","",x)})
+        BalanceSheet <- as.data.frame(apply(BalanceSheet, 2, as.numeric))
+        rownames(BalanceSheet) <- paste(names_row)
+        temp2 <- BalanceSheet
+        
+        # Collect the Cash Flow data
+        link <- "https://finance.yahoo.com/quote/"
+        link <- paste0(link, stock[i], "/cash-flow?p=", stock[i])
+        wahis.session <- html_session(link)
+        p <- wahis.session %>%
+          html_nodes(xpath = '//*[@id="Col1-1-Financials-Proxy"]/section/div[3]/table')%>%
+          html_table(fill = TRUE)
+        CashFlow <- p[[1]]
+        colnames(CashFlow) <- CashFlow[1,]
+        CashFlow <- CashFlow[-c(1,3,11,16),]
+        names_row <- CashFlow[,1]
+        CashFlow <- CashFlow[,-1]
+        CashFlow <- apply(CashFlow, 2, function(x){gsub(",","",x)})
+        CashFlow <- as.data.frame(apply(CashFlow, 2, as.numeric))
+        rownames(CashFlow) <- paste(names_row)
+        temp3 <- CashFlow
+        
+        assign(paste0(stock[i],'.f'),value = list(IncomeStatement = temp1, BalanceSheet = temp2, CashFlow = temp3), envir = parent.frame())
+        },
+      error = function(cond){
+        message(stock[i], "Give error ",cond)
+        }
+      )
+  }
+}
+
+```
+
+I firstly scrape the Yahoo Finance website and collect fundamental data for the Income Statement, Balance Sheet, and Cash Flows. I will analyse some well known comparable tech stocks `Apple`, `Amazon`, `Google`, `Microsoft` and `Baidu` and see how they all compare.
+
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+symbols <- c("AAPL", "AMZN", "GOOG", "MSFT", "BIDU")
+getFin(symbols)
+symbols.f <- sapply(symbols, function(x) { paste0(x, ".f") })
+tickers <- list2env(mget(symbols.f))
+
+IS <- lapply(tickers, "[[", "IncomeStatement")
+BS <- lapply(tickers, "[[", "BalanceSheet")
+CF <- lapply(tickers, "[[", "CashFlow")
+
+IS <- as.data.frame(IS)
+BS <- as.data.frame(BS)
+CF <- as.data.frame(CF)
+```
+
+#### How the Income Statement looks:
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+IS %>%
+  kable(caption = "Income Statement") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+#### How the Balance Sheet looks:
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+BS %>%
+  kable(caption = "Balance Sheet") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+#### How the Cash Flow Statement looks:
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+CF %>%
+  kable(caption = "Cash Flow Statements") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+The data still looks a little messy and unreadable and in order to do the calculations we should have the data in a different shape. That is, I find it easier to program calculations column wise instead of rowwise. It's also easier to combine the data instead of calculating the ratios across different data frames as we have currently.
+
+#### Clean the data up a little bit
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+ISBSCF <- rbind(IS, BS, CF)
+
+ISBSCF <- ISBSCF %>%
+  t() %>%
+  data.frame() %>%
+  rownames_to_column('rn') %>%
+  separate(rn, into = c("symbol", "year"),
+           sep = -4, convert = TRUE)
+
+
+ISBSCF$symbol <- gsub("(f).*", "", ISBSCF$symbol)
+ISBSCF$symbol <- gsub('.$', '', ISBSCF$symbol)
+ISBSCF$symbol <- gsub('^X', '', ISBSCF$symbol)
+```
+
+#### How all the fundamentals look now:
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+ISBSCF %>%
+  kable(caption = "Income Statement - Balance Sheet - Cash Flow") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+This looks much cleaner. The data we currently have at the moment is just the Income Statement, Balance Sheet, and Cash Flow statements, but in order to make better comparisons across firms other information is needed such as *Shares Outstanding* which will be used in the *Market Capitalisation* calculation. We can use the `quantmod` package to pull some statistics from the Yahoo Finance statistics page.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+############################## Get stats data ##################################
+
+metrics <- yahooQF(c("Name", "Enterprise Value", "Enterprise Value/Revenue", "Enterprise Value/EBITDA", "Total Cash Per Share (mrq)", "EBITDA", "Volume", "P/E Ratio", "Dividend Yield", "Shares Outstanding", "Price/Book"))
+
+stats <- getQuote(symbols, what = metrics) %>%
+  rownames_to_column("symbol")
+
+colnames(stats) <- gsub(" ", ".", colnames(stats))
+colnames(stats) <- gsub("/", ".", colnames(stats))
+```
+
+#### How the company statistics look:
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+stats %>%
+  kable(caption = "Company Statistics") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+
+```
+
+You can play around with downloading other statistics directly from the Yahoo Statistics pages, for instance, heres the statistics page for `GOOG` [here](https://finance.yahoo.com/quote/GOOG/key-statistics?p=GOOG). Already we have quite a bit of useful information, however not all of the statistics are able to be scraped from the Yahoo Finance statistics pages, therefore we will have to try and compute some ourselves. Moreover, we have some of the important statistics - *Shares Outstanding* and we can use the *PE.Ratio*, *Dividend.Yield* and *Price.Book* ratios to check the accuracy of our calculations later on.
+
+We also need to collect the stock price data since we need the *Closing Price* today to compute *per share* statistics.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+############################## Get latest stock price data ######################
+stocks <- symbols %>%
+  tq_get(get = "stock.prices",
+         from =  "2018-01-01",
+         to =  Sys.Date()) %>%
+  select(symbol, date, adjusted) %>%
+  group_by(symbol) %>%
+  arrange(desc(date)) %>%
+  slice(1)
+```
+
+#### How the stock price data looks:
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+stocks %>%
+  kable(caption = "Most Recent Stock Prices") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+
+```
+
+We have three different data sets now `ISBSCF`, which is our combined Income Statement, Balance Sheet and Cash Flow statements, `stats` which is our Yahoo Finance company statistics data and finally `stock` which is todays closing price of our companies.
+
+Now I join all the data together (we are only interested in 2018 values but we could extend it to more years).
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+############################## Join all 3 datasets together ######################
+financials <- ISBSCF %>%
+  filter(year == 2018) %>%
+  inner_join(stats, by = "symbol") %>%
+  inner_join(stocks, by = "symbol")
+```
+
+#### How all the data looks after joining the fundamentals, stats and latest share price data:
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+financials %>%
+  head(10) %>%
+  kable(caption = "All Data") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+
+```
+
+Now I think we have enough information to calculate some financial ratios based on company statistics and their respective financial data. The variables we have are:
+
+#### What variables we have in the data:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+colnames(financials) %>%
+  data.frame() %>%
+  setNames(c("Fundamentals")) %>%
+  split(as.integer(gl(nrow(.), 14, nrow(.)))) %>%
+  kable(caption = "Company Variables") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+Which is quite a lot of information. I like this method of calculating financial data since `dplyr` and the `pipe` function makes it intuitive to read and we can see what we are calculating.
+
+#### Some basic financial ratios:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+############################## Create some financial ratios ######################
+
+ratios <- financials %>%
+  mutate(BvE = Total.Assets - Total.Liabilities,
+         BvE_per_share = BvE / (Shares.Outstanding / 1000),
+         EBITDA = Earnings.Before.Interest.and.Taxes + Depreciation,
+         Market_Cap = adjusted * (Shares.Outstanding / 1000),                 #¡Cuidado!
+         EV = (Market_Cap + Total.Liabilities) - Cash.And.Cash.Equivalents,
+         Mkt_Book = EV /(Total.Assets - Cash.And.Cash.Equivalents),
+         Price_Book = Market_Cap / Total.stockholders..equity,
+         Price_Sales = Market_Cap / Total.Revenue,
+         PE_Ratio = Market_Cap / Net.Income,
+         EV_EBITDA =  EV / EBITDA,
+         NI_REV = Net.Income / Total.Revenue,
+         Rev_TA = Total.Revenue / Total.Assets,
+         TA_BvE = Total.Assets / BvE,
+         ROE = NI_REV * Rev_TA * TA_BvE * 100) %>%
+  select(symbol, date, BvE, BvE_per_share, EBITDA, Market_Cap, EV, Mkt_Book, Price_Book, Price_Sales,
+         PE_Ratio, EV_EBITDA, NI_REV, Rev_TA, TA_BvE, ROE)
+``` 
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+ratios %>%
+  kable(caption = "Financial Ratios") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+
+```
+
+We can check if the calculations are somewhat correct by comparing them to Yahoo Finance statistics. I select only a few ratios which we were able to get from the Yahoo statistics page.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+stats %>%
+  left_join(ratios, by = c("symbol")) %>%
+  select(symbol, Name, P.E.Ratio, PE_Ratio, Price.Book, Price_Book) %>%
+  kable(caption = "Price Earnings, Price Book ratios") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+The ratios seem somewhat similar. However `GOOG`, `MSFT` and `BIDU` PE Ratio looks a little off. The same for `BIDU`'s `Price_Book ratio`. The problem here is that the `adjusted` stock price for `BIDU` is in `USD` however the financials are in `CNY`, so we have to be careful with foreign companies. I did develop a model which scrapes the currency information also and makes the conversion and we can better compare companies in different markets, which I will leave for another post.
+
+
+Two things here:
+
+1. Yahoo uses a number of different sources for their statistics, just check out their **Footnotes** side bar for Google [here](https://finance.yahoo.com/quote/GOOG/key-statistics?p=GOOG). They use *Morningstar*, *Thomson Reuters*, *EDGAR* and *CapitalIQ*.
+
+2. The *Shares Outstanding* information will not be the same to the one we use. Yahoo published the more recent *Shares Outstanding* values but their PE ratios might use *December 2018* - *Net Income* along with *December 2018* - *Market Cap*, taking the *Shares Outstanding* and *adjusted* prices from *December 2018*. However we use *September 2019* values! Historical `Shares Outstanding` information can be found here for [Google](https://www.macrotrends.net/stocks/charts/GOOGL/alphabet/shares-outstanding)
+
+We can plot the performance of each stock to see how they did over the past year.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+
+symbols %>%
+  tq_get(get = "stock.prices",
+         from =  "2018-12-31",
+         to =  Sys.Date()) %>%
+  select(symbol, date, adjusted) %>%
+  group_by(symbol) %>%
+  arrange(desc(date)) %>%
+  ggplot(aes(x = date, y = adjusted))+
+  geom_line() +
+  facet_wrap(~ symbol, ncol = 2, scales = "free") +
+  theme_tq() +
+  ggtitle("Stock Prices since December 2018")
+
+```
+
+Any errors are my own, if you find any please let me know!
