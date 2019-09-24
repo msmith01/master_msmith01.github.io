@@ -3,18 +3,12 @@ title: Fundamental Financial Ratios in R
 author: ~
 date: '2019-09-22'
 slug: fundamental-financial-ratios-in-r
-categories: []
-tags: []
 subtitle: 'Computing a series of financial ratios colleted from Yahoo Finance and analysing the results'
 summary: 'An analysis of company financial statements: Book-Value-Equity, EBITDA, Enterprise Value, Market-Book, DuPont anaysis. '
-authors: []
-lastmod: '2019-09-22T19:41:31+02:00'
-featured: no
-image:
-  caption: ''
-  focal_point: ''
-  preview_only: no
-projects: []
+
+categories: [Yahoo Finance]
+projects: [Asset Pricing]
+tags: [yahoo finance, asset pricing, fundamental analysis, ratios]
 
 output:
   html_document:
@@ -332,6 +326,20 @@ symbols %>%
   theme_tq() +
   ggtitle("Stock Prices since December 2018")
 
+```
+
+#### Also using fundamental data:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+financials %>%
+  ggplot(aes(x = symbol)) +
+  geom_col(aes(y = Total.Assets, color = "blue", fill = "blue", alpha = 0.5)) +
+  geom_col(aes(y = Total.Liabilities, color = "red", fill = "red", alpha = 0.5)) +
+  ggtitle("Total Assets & Total Liabilities") +
+  xlab("Symbols") +
+  ylab("Total Assets & Total Liabilities") +
+  theme_tq() +
+  theme(legend.position = "none")
 ```
 
 Any errors are my own, if you find any please let me know!
