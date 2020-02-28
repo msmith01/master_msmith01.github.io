@@ -1,0 +1,416 @@
+---
+authors:
+- admin
+date: "2020-02-02"
+layout: post
+title: "Machine Learning (XGBoost) Time-Series Classification Trading Strategy"
+subtitle: A simple quantitative trading strategy using time series features
+summary: I construct a series of time-series features from the literature and apply a novel XGBoost model to predict the next days price of a number of assets. The concept is simple and can be expanded to many variables, incorporate many assets and be applied to different Machine Learning models.
+
+
+categories: [Quantitative Finance, Machine Learning, Time Series, Algo Trading]
+projects: [Algo Trading]
+tags: [time-series, machine learning, financial markets, quant finance, algo trading, quant analytics]
+
+comments: false
+draft: false
+featured: false
+
+# bibliography: mybibml.bib
+# link-citations: yes
+
+featuredImage: "plot_thumb.jpg"
+---
+
+```{r setup, include = FALSE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(kableExtra)
+options(scipen=999)
+```
+
+# Introduction
+
+Using Machine Learning (ML) and past price data to predict the next periods price or direction in the stock market is not new, neither does it produce any meaningful predictions. In this post I *collapse* down a series of asset time series data into a simple classification problem and see if a Machine Learning model can do a better job at predicting the next periods direction. I apply a similar method here [Time Series Classification Synthetic vs Real Financial Time Series](https://lf0.com/post/synth-real-time-series/financial-time-series/). The **objective** and **strategy** is to invest in a single asset each day. The asset we invest in will be the asset which the Machine Learning model is most *confident* will go up in share value in the next period $t+1$. Alternatively speaking, we invest in the asset in which the Machine Learning model gives the highest predicted probability that, a given asset will go up in value tomorrow. That is, if the model predicts on day $t$ that asset GOOG was going to be higher than it’s previous close with a predicted probability of 0.78 and it also predicts that AMZN would go up with 0.53 probability then we would invest in GOOG today. -*we only invest in one asset each day*- . The model can be expanded to short selling and multi-asset purchasing and multi-periods.
+
+## Load in the packages.
+
+```{r include = TRUE, message = FALSE, warning = FALSE}
+require(PerformanceAnalytics)
+library(data.table)
+library(dplyr)
+library(tibble)
+library(TTR)
+library(tidyr)
+library(tidyquant)
+library(tsfeatures)
+library(rsample)
+library(purrr)
+library(stringr)
+library(tibbletime) # tsibble clashes with the base R index() function
+library(xgboost)
+library(rvest)
+```
+
+Pre-define a few intialisation objects and set the ticker symbols of the companies we want to download. For this task I am not really interested in which companies I apply the strategy to. For this reason, I scrape the Wikipedia page for the S\&P 500 and take a random sample of 30 tickers.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+set.seed(1234)
+###################### Pre-define functions for later ##########################
+
+Scale_Me <- function(x){
+  (x - mean(x, na.rm = TRUE)) / sd(x, na.rm = TRUE)
+}                                  # Note: I don't actually use this function but I leave it in here.
+
+#################################################################################
+
+start_date <- "2017-01-01"
+end_date <- "2020-01-01"
+
+url <- "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+symbols <- url %>%
+  read_html() %>%
+  html_nodes(xpath = '//*[@id="constituents"]') %>% 
+  html_table() %>% 
+  .[[1]] %>% 
+  filter(!str_detect(Security, "Class A|Class B|Class C")) %>%     # Removes firms with Class A, B & C shares
+  sample_n(30) %>% 
+  pull(Symbol)
+
+
+#symbols <- c(
+  #'GOOG', 'MSFT', 'HOG', 'AAPL', 'FB' 
+  #'AMZN', 'EBAY', 'IBM', 'NFLX', 'NVDA',
+  #'TWTR', 'WMT', 'XRX', 'INTC', 'HPE'
+# )
+```
+
+## The data
+
+Download the data and store it into a new environment.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+dataEnv <- new.env()
+getSymbols(symbols, 
+           from = start_date, 
+           to = end_date, 
+           #src = "yahoo", 
+           #adjust = TRUE, 
+           env = dataEnv)
+```
+
+Once the data has been downloaded and stored into a new environment I clean the data up a little, put all the lists into a single data frame, compute the daily returns for each asset and create the *up* or *down* direction which will be what the classification model will try to predict.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+df <- eapply(dataEnv, function(x){
+  as.data.frame(x) %>% 
+    rename_all(function(n){
+      gsub("^(\\w+)\\.", "", n, perl = TRUE)
+    }
+    ) %>%
+    rownames_to_column("date")  
+}) %>% 
+  rbindlist(idcol = TRUE) %>% 
+  mutate(date = as.Date(date)) %>% 
+  group_by(.id) %>% 
+  tq_mutate(
+    select = Adjusted,
+    mutate_fun = periodReturn,
+    period = "daily",
+    type = "arithmetic"
+  ) %>% 
+  mutate(
+    Adj_lag = lag(Adjusted),
+    chng_Adj = ifelse(Adjusted > Adj_lag, 1, 0) # more simply we could have just done if ret were pos/neg
+  ) %>% 
+  select("date", ".id", "Adjusted", "daily.returns", "chng_Adj", "Open", "High", "Low", "Close") %>% 
+  as_tibble() %>% 
+  as_tbl_time(index = date) %>% 
+  setNames(c("date", "ID", "prc", "ret", "chng", "open", "high", "low", "close")) %>% 
+  drop_na(chng)
+```
+
+The first few observations of the data looks like:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+df %>%
+  head(3) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+We can use the `nest()` function to put the data into convenient nested tibbles that we can simply `map()` over and apply the `rolling_origin()` function from the `rsample` package such that, each of our assets will have their own `rolling_origin()` function applied to it without any overlap or mixing of the asset classes, I do this in order to create the time series features for each period.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+nested_df <- df %>%
+  mutate(duplicate_ID = ID) %>% 
+  nest(-ID)
+```
+
+I split the time series data into a number of lists such that the `analysis()` list contains 100 observations in each list and has a corresponding `assessment()` list which contains 1 observation. Usually the `analysis()` will become our training data set and the `assessment()` will become our testing data set, however, here I am using the `rolling_origin()` function to help create the time series features.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+# First we set the number of days we want to construct the ts features
+rolled_df <- map(nested_df$data, ~ rolling_origin(.,
+                                                  initial = 100,
+                                                  assess = 1,
+                                                  cumulative = FALSE,
+                                                  skip = 0))
+```
+
+## Time-Series Functions 
+
+In order to create the time series variables I use the `tsfeatures` package but there is also the `feasts` packages [here](http://feasts.tidyverts.org/). For this model I simply select a few functions of interest from the `tsfeatures` package.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+functions <- c(
+  "entropy",                   # Measures the "forecastability" of a series - low values = high sig-to-noise, large vals = difficult to forecast
+  "stability",                 # means/variances are computed for all tiled windows - stability is the variance of the means
+  "lumpiness",                 # Lumpiness is the variance of the variances
+  "max_level_shift",           # Finds the largest mean shift between two consecutive windows (returns two values, size of shift and time index of shift)
+  "max_var_shift",             # Finds the max variance shift between two consecutive windows (returns two values, size of shift and time index of shift)
+  "max_kl_shift",              # Finds the largest shift in the Kulback-Leibler divergence between two consecutive windows (returns two values, size of shift and time index of shift)
+  "crossing_points"            # Number of times a series crosses the mean line
+)
+```
+
+I wrote this code a little while ago and at the time I wrapped the model into a function. I think it would be more fun to exclusively stick to using just `map()` functions instead of `function(SYMB)`. The function does the following for each asset in our data:
+
+Using the out-of-sample `t+1` (`assessment`) data, bind these lists together into a single data frame. Next apply the `functions` character string to call the functions from the `tsfeatures` package, apply these functions to the in-sample (`analysis`) data (which consists of 100 observations each), such that, we obtain a single *collapsed* down observation that we can just bind together. Finally we bind the columns of these two data sets together using `bind_cols()`. After this I rename the `chng` variable and rename the time series feature variables to something more dynamic using `~str_c("X", seq_along(.))` so we can just add functions to the `functions` character string and not have to worry about renaming the variables individually in order for the model to work.
+
+Once this is done, I create the Machine Learning data set again using the `rolling_origin()` function. The first `rolling_origin()` function was used to help *collapse* the time series data down on a rolling basis by taking the previous 100 days of data and calculating the `tsfeatures` function on it - *a similar method to calculating a rolling mean/sd using the `rollapply()` function from the `zoo` package*.
+
+I next split the data into `X` variables with `X_train` and `X_test` and the corresponding `Y` variable with `Y_train` and `Y_test`. The package `xgboost` expects a certain type of `xgb.DMatrix()` which is what `dtrain` and `dtest` are doing.
+
+Then, I set the XGBoost parameters and apply the XGBoost model. - *Suitable cross validation should be performed at this point, however I will leave this for another post since time series cross validation is quite tricky and there is no function in R which helps with this type of cross validation (that I have found as of 2020-02-02)* -
+
+Once the model has been trained, I make the predictions.
+
+## Apply the model
+
+The function to compute all this is the following:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+Prediction_Model <- function(SYMB){
+  data <- bind_cols(
+    map(rolled_df[[SYMB]]$splits, ~ assessment(.x)) %>%
+      bind_rows(),
+    map(rolled_df[[SYMB]]$splits, ~ analysis(.x)) %>%
+      map(., ~tsfeatures(.x[["ret"]], functions)) %>%          # Compute the TSFeatures
+      bind_rows()
+  ) %>%
+    rename(Y = chng) %>%
+    rename_at(vars(-c(1:9)), ~str_c("X", seq_along(.)))        
+  
+  ml_data <- data %>% 
+    as_tibble() %>% 
+    rolling_origin(
+      initial    = 200,
+      assess     = 1,
+      cumulative = FALSE,
+      skip       = 0)
+  
+  X_train <- map(
+    ml_data$splits, ~ analysis(.x) %>%
+      as_tibble(., .name_repair = "universal") %>%
+      select(starts_with("X")) %>% 
+      as.matrix()
+  )
+  
+  Y_train <- map(
+    ml_data$splits, ~ analysis(.x) %>%
+      as_tibble(., .name_repair = "universal") %>%
+      select(starts_with("Y")) %>% 
+      as.matrix()
+  )
+  
+  X_test <- map(
+    ml_data$splits, ~ assessment(.x) %>%
+      as_tibble(., .name_repair = "universal") %>%
+      select(starts_with("X")) %>% 
+      as.matrix()
+  )
+  
+  Y_test <- map(
+    ml_data$splits, ~ assessment(.x) %>%
+      as_tibble(., .name_repair = "universal") %>%
+      select(starts_with("Y")) %>% 
+      as.matrix()
+  )
+  
+  #############################################################
+  
+  dtrain <- map2(
+    X_train, Y_train, ~ xgb.DMatrix(data = .x, label = .y, missing = "NaN")
+  )
+  
+  dtest <- map(
+    X_test, ~ xgb.DMatrix(data = .x, missing = "NaN")
+  )
+  
+  # Parameters:
+  watchlist <- list("train" = dtrain)
+  params <- list("eta" = 0.1, "max_depth" = 5, "colsample_bytree" = 1, "min_child_weight" = 1, "subsample"= 1,
+                 "objective"="binary:logistic", "gamma" = 1, "lambda" = 1, "alpha" = 0, "max_delta_step" = 0,
+                 "colsample_bylevel" = 1, "eval_metric"= "auc",
+                 "set.seed" = 176)
+  
+  # Train the XGBoost model
+  xgb.model <- map(
+    dtrain, ~ xgboost(params = params, data = .x, nrounds = 10, watchlist)
+  )
+  
+  xgb.pred <- map2(
+    .x = xgb.model, 
+    .y = dtest, 
+    .f = ~ predict(.x, newdata = .y, type = 'prob')
+  )
+  
+  preds <- cbind(plyr::ldply(xgb.pred, data.frame),
+                 plyr::ldply(Y_test, data.frame)) %>% 
+    setNames(c("pred_probs", "actual")) %>% 
+    bind_cols(plyr::ldply(map(ml_data$splits, ~assessment(.x)))) %>% 
+    rename(ID = duplicate_ID) %>% 
+    #select(pred_probs, actual, date, ID, prc, ret) %>% 
+    as_tibble()
+  return(preds)
+}
+```
+
+We can apply the above model to create the time series features, train and test on each of our assets by running the following.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, results = "hide"}
+Sys_t_start <- Sys.time()
+Resultados <- lapply(seq(1:length(rolled_df)), Prediction_Model)
+Sys_t_end <- Sys.time()
+round(Sys_t_end - Sys_t_start, 2)
+```
+
+The `Resultados` output will give us a list the length of the number of assets we have in our data. The first few observations of the first asset in the list looks like:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+Resultados[[1]] %>%
+  head(3) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Which consist of the XGBoost predicted probabilities, the actual observed result, the date of the result (of the out-of-sample testing data), the observed share price, the calculated daily returns, (a duplicate of the observed result), the OHLC data we collected from Yahoo and finally the time series features we constructed and then reneamed to $X_{n}$ 
+
+The **objective** of this strategy was to invest every day in the asset which obtained the highest predicted probability that the market was going to go up. That is, if the model predicts on day $t$ that asset `GOOG` was going to be higher than it's previous close with a predicted probability of 0.78 and it also predicts that `AMZN` would go up with 0.53 probability then we would invest in `GOOG` today. That is, we only invest in the asset with the highest predicted probability that the market is going to go up.
+
+Therefore, I create a new data frame called `top_assets` which basically gives me the highest predicted probability across all assets each day.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+top_assets <- plyr::ldply(Resultados) %>% 
+  #select(pred_probs, actual, date, open, high, low, close, prc, ret) %>% 
+  group_by(date) %>%
+  arrange(desc(pred_probs)) %>%
+  dplyr::slice(1) %>% 
+  ungroup() %>% 
+  select(date, everything()) %>% 
+  rename(score = pred_probs) %>% 
+  select(-actual)
+```
+
+## Strategy Assessment
+
+The first 10 days of the strategy investments look like:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+top_assets %>%
+  head(10) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+We can see that the column `score` is the probability for the asset with the highest predicted probability that it's price was going to be greater than it's previous close. The `ID` column gives us the asset ticker we invest in.
+
+Next I want to analyse the strategy of picking the *best* predicted winners against the S\&P500 bench mark and therefore download the S\&P 500 index.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+top_assets <- xts(top_assets[,c(2:ncol(top_assets))], order.by = top_assets$date) # put top_assets into xts format
+
+# Analyse strategy
+getSymbols("SPY", 
+           from = start_date, 
+           to = end_date, 
+           src = "yahoo") 
+
+#detach("package:tsibble", unload = TRUE) # tsibble clashes with the base R index() function
+SPY$ret_Rb <- Delt(SPY$SPY.Adjusted)
+SPY <- SPY[index(SPY) >= min(index(top_assets))]
+
+RaRb <- cbind(top_assets, SPY)
+```
+
+From here we can see how the strategy compares with the S\&P 500. I show a number of statistics for analysing asset returns from the `PerformanceAnalytics` package. I have not expanded the model to include short selling or construct multi-asset portfolios of the top $N$ assets.
+
+We can plot the performance of our strategy:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+charts.PerformanceSummary(RaRb[, c("ret", "ret_Rb")], geometric = FALSE, wealth.index = FALSE, 
+                          main = "Strategy vs. Market")
+```
+
+Take a look at the drawdown and risk metrics.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+rbind(
+  table.DrawdownsRatio(RaRb[, c("ret", "ret_Rb")]), table.DownsideRiskRatio(RaRb[, c("ret", "ret_Rb")])
+)
+```
+
+Take a closer look at the drawdown information.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+lapply(RaRb[, c("ret", "ret_Rb")], function(x){table.Drawdowns(x)})
+```
+
+Compare the returns.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+chart.Boxplot(RaRb[,c("ret", "ret_Rb")],  main = "Returns")
+```
+
+Compare return statistics.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+table.Stats(RaRb[, c("ret", "ret_Rb")]) %>% 
+  t() %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Compare Sharpe Information.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+lapply(RaRb[, c("ret", "ret_Rb")], function(x){SharpeRatio(x)})
+```
+
+Plot the Risk - Return scatter plot.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+chart.RiskReturnScatter(RaRb[, c("ret", "ret_Rb")],  # check this plot a little more
+                        Rf=.03/252, scale = 252, # for daily data
+                        main = "Risk - Return over the period")
+```
+
+Plot the rolling return, risk and Sharpe performance.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+charts.RollingPerformance(RaRb[, c("ret", "ret_Rb")],      
+                          Rf=.03/12, 
+                          colorset = c("red", rep("darkgray",5), "orange", "green"), lwd = 2)
+```
+
+Compute the yearly returns.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+lapply(RaRb[, c("ret")],function(x){periodReturn(
+  x, period = 'yearly', type = 'arithmetic')})        # change type to log for continuous
+
+lapply(RaRb[, c("ret_Rb")],function(x){periodReturn(
+  x, period = 'yearly', type = 'arithmetic')})
+```
+

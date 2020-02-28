@@ -1,0 +1,458 @@
+---
+authors:
+- admin
+date: "2019-12-29"
+layout: post
+title: "Quantitative Trading Strategies using quantmod"
+subtitle: A series of quant algo's for understanding the quantstrat package.
+summary: A simple backtested Bollinger-Band strategy and Directional Movement Index (ADX) strategy.
+
+
+categories: [trading, technical trading, algorithmic trading, systematic trading]
+projects: [Quantitative Finance]
+tags: [time-series, finance, quant finance, yahoo-finance, systematic trading, algo trading, technical analysis]
+
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    fig_width: 7
+    fig_height: 6
+    fig_caption: true
+    df_print: paged
+    #code_folding: hide
+    
+
+comments: true
+draft: false
+featured: false
+
+bibliography: mybibml.bib
+link-citations: yes
+
+#featuredImage: "plot_thumb.jpg"
+---
+
+```{r setup, include = FALSE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(kableExtra)
+options(scipen=999)
+```
+# Strategies {.tabset .tabset-fade .tabset-pills}
+## Introduction: 
+**Note:** This post is unfinished.
+
+This post goes through a number of the technical trading functions in the `TTR` package [here](https://cran.r-project.org/web/packages/TTR/TTR.pdf). I add definitions and show examples of how the functions work.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+library(dplyr)
+library(quantmod)
+library(tidyquant)
+library(TTR)
+library(timetk)
+library(tidyr)
+library(ggplot2) 
+library(directlabels)
+library(data.table)
+library(quantstrat)
+library(purrr)
+library(quantstrat)
+```
+
+We can download some data using the `quantmod` package which stores the different assets into our Global Environment.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+start_date <- "2013-01-01"
+end_date <- "2017-08-31"
+symbols <- c("AAPL", "AMD", "ADI",  "ABBV", "A",  "APD", "AA", "CF", "NVDA", "HOG", "WMT", "AMZN"
+             #,"MSFT", "F", "INTC", "ADBE", "AMG", "AKAM", "ALB", "ALK"
+)
+
+getSymbols(symbols, 
+           from = start_date,
+           to = end_date)
+```
+
+The first few observations for `AAPL` looks like:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+AAPL %>% 
+  data.frame() %>% 
+  head() %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+## Bollinger Bands Strategy
+
+The idea of this strategy is 
+
+Definition: A Bollinger Band consists of 3 lines. A simple moving average (SMA) and two additional lines plotted 2 standard deviations above and below the SMA. The standard deviation measures a stocks volatility and so when the markers are more volatile then the Bollinger Bands become wider. When the market is flat the Bollinger Banks contract.
+
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+chartSeries(NVDA,
+            theme = chartTheme("white"),
+            TA = c(addBBands(n = 20, sd = 2, ma = "SMA", draw = 'bands', on = -1))) 
+chartSeries(AMZN,
+            theme = chartTheme("white"),
+            TA = c(addBBands(n = 20, sd = 2, ma = "SMA", draw = 'bands', on = -1))) 
+```
+
+
+We set the initial quantstrat parameters and initialise the strategy.
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+rm.strat("BollingerBandsStrat")
+currency('USD')
+stock(symbols, currency = 'USD', multiplier = 1)
+init_date = as.Date(start_date) - 1
+init_equity = 1000
+portfolio.st <- account.st <- 'BollingerBandsStrat'
+initPortf(portfolio.st,
+          symbols = symbols,
+          initDate = init_date)
+initAcct(account.st,
+         portfolios = 'BollingerBandsStrat',
+         initDate = init_date)
+initOrders(portfolio = portfolio.st,
+           initDate = init_date)
+BBands_Strategy <- strategy("BollingerBandsStrat")
+```
+
+### Adding indicators:
+
+We add the Bollinger Bands indicator from the `TTR` package to the strategy. It takes a Simple Moving Average (SMA) and the High Low Close data from each of our stocks, add the indicator to the defined `BBands_Strategy` and creates a new column in our data alled `BollingerBands_Label`.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+# Add indicators
+BBands_Strategy <- add.indicator(
+  strategy = BBands_Strategy,
+  name = "BBands",
+  arguments = list(
+    HLC = quote(HLC(mktdata)),
+    maType = 'SMA'),
+  label = 'BollingerBands_Label')
+```
+
+### Adding signals:
+
+- The first signal states that when the **close** is greater than the **upper Bollinger Band**, add a value of 1 into a column called **Close.gt.LowerBBand**. The `sigCrossover` function only returns the first occurence of the relationship switching from false to true. Replacing with `sigComparison` here would return all occurences of the relationship being greater than the upper band.
+
+- The second signal states that when the **close** is less than the **lower Bollinger Band** add a value of 1 into a column called **Close.lt.LowerBBand**. Again using the `sigCrossover` function to only return the first occurence.
+
+- The third signal
+
+The below code creates 3 new columns in our `mktdata`. **dn.BollingerBands_Label**, **mavg.BollingerBands_Label**, **up.BollingerBands_Label**. Which are the **lower**, **middle** and **upper** Bollinger Band values. It also creates the following: **Close.gt.UpperBBand**, **Close.lt.LowerBBand**,       **Cross.MiddleBBand**. Which takes on the values according to whether the `sigCrossover' has occured. 
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+# Add Signals
+
+BBands_Strategy <- add.signal(
+  BBands_Strategy, 
+  name = "sigCrossover",
+  arguments = list(
+    columns = c("Close","up"),
+    relationship = "gt"),
+  label = "Close.gt.UpperBBand")
+
+BBands_Strategy <- add.signal(
+  BBands_Strategy,
+  name = "sigCrossover",
+  arguments = list(
+    columns = c("Close","dn"),
+    relationship = "lt"),
+  label = "Close.lt.LowerBBand")
+
+BBands_Strategy <- add.signal(
+  BBands_Strategy,
+  name = "sigCrossover",
+  arguments = list(
+    columns = c("High","Low","mavg"),
+    relationship = "op"),
+  label = "Cross.MiddleBBand")
+```
+
+The `mktdata` (which gets presented after running `applyStrategy` and `updatePortf`) would look like:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+
+mktdata_df <- structure(c(71.290001, 71.099998, 69.540001, 69.190002, 68.720001, 
+70, 70.220001, 70.5, 70.690002, 70.919998, 71.589996, 70.779999, 
+71.519997, 73.470001, 73.75, 73.489998, 71.699997, 71.230003, 
+70, 69.449997, 69.849998, 71.470001, 70.540001, 71.339996, 71.389999, 
+71.959999, 71.879997, 71.900002, 73.260002, 74.040001, 74.129997, 
+73.610001, 71.209999, 70.75, 68.129997, 68.540001, 68.300003, 
+69.720001, 69.889999, 70.440002, 70.610001, 70.580002, 70.779999, 
+70.779999, 71.510002, 72.989998, 73.25, 73.199997, 71.389999, 
+70.82, 69.300003, 68.760002, 69.209999, 70.260002, 70.400002, 
+70.440002, 71.110001, 71.660004, 70.779999, 71.739998, 73.260002, 
+73.720001, 73.379997, 73.32, 3968600, 6821000, 25683700, 14682300, 
+11973600, 20413100, 9165200, 11817600, 10557600, 8819000, 18883600, 
+8902300, 10567200, 9142000, 7149600, 6680000, 59.98333, 59.504414, 
+58.227257, 57.77356, 58.151653, 59.033894, 59.15152, 59.185135, 
+59.748081, 60.210197, 59.470806, 60.277405, 61.554558, 61.941055, 
+61.655396, 61.604973, 68.7163183861157, 68.820425561134, 68.8492933107268, 
+68.8222213888124, 68.7847171850547, 68.8611889173517, 68.9024910975237, 
+69.0098323413827, 69.144160265098, 69.2048952015255, 69.280758438958, 
+69.331279655204, 69.2737568664481, 69.2434701105551, 69.1748339416858, 
+69.1401755980128, 70.0924997833334, 70.18133315, 70.1904998666667, 
+70.1821666666667, 70.1683332833334, 70.2211667, 70.2495001166667, 
+70.3210001166667, 70.4120001166667, 70.49383365, 70.56166685, 
+70.63400015, 70.7515003166667, 70.9530003833334, 71.1056669666667, 
+71.2256669166667, 71.468681180551, 71.542240738866, 71.5317064226065, 
+71.542111944521, 71.551949381612, 71.5811444826483, 71.5965091358097, 
+71.6321678919507, 71.6798399682354, 71.7827720984746, 71.842575261042, 
+71.9367206447961, 72.2292437668853, 72.6625306561117, 73.0364999916475, 
+73.3111582353206, 0.987156666281122, 0.776286644841163, 0.109617724915029, 
+0.0347239258050581, 0.121161793131219, 0.596386856466182, 0.510084274225545, 
+0.659781185608594, 0.74635086306854, 0.851517179792061, 0.728352841216843, 
+0.822146175389438, 1.15138788120332, 1.26931452805606, 1.14246821654207, 
+1.01570559515004, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, 
+NA, 1, NA, NA, NA, NA, NA, NA, 1, NA, NA, NA, NA, NA, NA, NA, 
+NA, NA, NA, NA, NA, NA, NA, 1, NA, NA, 1, NA, NA, NA, NA, NA, 
+NA, NA, NA, NA, NA), class = c("xts", "zoo"), .indexCLASS = "Date", .indexTZ = "UTC", tclass = "Date", tzone = "UTC", src = "yahoo", updated = structure(1577999728.17358, class = c("POSIXct", 
+"POSIXt")), index = structure(c(1360713600, 1360800000, 1360886400, 
+1361232000, 1361318400, 1361404800, 1361491200, 1361750400, 1361836800, 
+1361923200, 1362009600, 1362096000, 1362355200, 1362441600, 1362528000, 
+1362614400), tzone = "UTC", tclass = "Date"), .Dim = c(16L, 13L
+), .Dimnames = list(NULL, c("WMT.Open", "WMT.High", "WMT.Low", 
+"WMT.Close", "WMT.Volume", "WMT.Adjusted", "dn.BollingerBands_Label", 
+"mavg.BollingerBands_Label", "up.BollingerBands_Label", "pctB.BollingerBands_Label", 
+"Close.gt.UpperBBand", "Close.lt.LowerBBand", "Cross.MiddleBBand"
+)))
+
+mktdata_df %>% 
+  as.data.table() %>% 
+  as.data.frame() %>% 
+  as_tibble() %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+In row 4 of the below table, the **close** is 68.76 which is less than the **lower Bollinger Band** **dn.BollingerBands_Label** column 68.822 and a `1` is indicated in the **Close.lt.LowerBBand** column. In row 13 of the same data, there is a `1` in the column **Close.gt.UpperBBand**. The **close** is 73.26 and the **up.BollingerBands_Label** is 72.23 so the **close** is **gt** then **Upper Bollinger Band**.
+
+### Add the rules
+
+ - When the **close** is greater than the **upper Bollinger Band** we go short by a quantity of 100 at the market price
+ - When the **close** is lower than the **lower Bollinger Band** we go long by a quantity of 100 at the market price.
+- When the **Close** crosses the **middle Bollinger Band** we exit all our positions.
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+# Add rules
+
+BBands_Strategy <- add.rule(
+  BBands_Strategy,
+  name = 'ruleSignal',
+  arguments = list(
+    sigcol = "Close.gt.UpperBBand", 
+    sigval = TRUE, 
+    orderqty = -100, 
+    ordertype = 'market',
+    orderside = NULL,
+    threshold = NULL),
+  type = 'enter')
+
+BBands_Strategy <- add.rule(
+  BBands_Strategy, 
+  name = 'ruleSignal',
+  arguments = list(
+    sigcol = "Close.lt.LowerBBand",
+    sigval = TRUE,
+    orderqty = 100,
+    ordertype = 'market',
+    orderside = NULL,
+    threshold = NULL),
+  type = 'enter')
+
+BBands_Strategy <- add.rule(
+  BBands_Strategy,
+  name = 'ruleSignal',
+  arguments = list(
+    sigcol = "Cross.MiddleBBand",
+    sigval = TRUE,
+    orderqty = 'all',
+    ordertype = 'market',
+    orderside = NULL,
+    threshold = NULL),
+  type = 'exit')
+```
+
+Apply the strategy and update the portfolio
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, results = "hide"}
+out <- applyStrategy(
+  strategy = BBands_Strategy,
+  portfolios = 'BollingerBandsStrat',
+  parameters = list( 
+    sd = 1.6, # number of standard deviations
+    n = 20) # MA periods
+  )
+
+updatePortf(Portfolio = 'BollingerBandsStrat', Dates = paste('::',as.Date(Sys.time()),sep=''))
+```
+
+
+
+Find the best performance stocks:
+
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+tradeStats(portfolio.st) %>% 
+  tibble::rownames_to_column("ticker") %>%
+  t() %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Performance plots and trade statistics
+
+
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+for(sym in symbols){
+  chart.Posn(Portfolio = 'BollingerBandsStrat', Symbol = sym)
+  plot(add_BBands(on = 1, sd = 1.6, n = 20))
+  
+  perf <- tradeStats(portfolio.st) %>% 
+    tibble::rownames_to_column("ticker") %>% 
+    filter(ticker == sym) %>% 
+    t() %>% 
+    kable() %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+}
+```
+
+Zooming in one some of the charts, it's possible to see when we entered and exited each trade.
+
+######### Here - everything works. chart.posn plots each plot in sequence find a way to plot it in one instance.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+chart.Posn(Portfolio = 'BollingerBandsStrat', Symbol = "AMD")
+plot(add_BBands(on = 1, sd = 1.6, n = 20))
+zoom_Chart('2017-01::2017-03')
+
+
+chart.Posn(Portfolio = 'BollingerBandsStrat', Symbol = "WMT")
+plot(add_BBands(on = 1, sd = 1.6, n = 20))
+zoom_Chart('2017-01::2017-03')
+
+chart.Posn(Portfolio = 'BollingerBandsStrat', Symbol = "AMZN")
+plot(add_BBands(on = 1, sd = 1.6, n = 20))
+zoom_Chart('2017-01::2017-03')
+```
+
+
+
+## ADX: Directional Movement Index
+
+The Directional Movement Index (DMI) @wilder1978new tries to identify the direction an asset is moving towards through comparing previous highs and lows. It trys to determine if an asset is trending and to measure the strength of that trend. It has four components:
+
+- Positive Direction Indicator (+DI): Computes the difference between todays high and the previous days high. - Helps identify the presence of an uptrend.
+
+- Negative Direction Indicator (-DI): Computes the difference between todays low and the previous days low. - Helps identify the presence of a downtrend.
+
+- Average Directional Index (ADX): A smoothed average of the difference of the +DI and -DI.
+
+- Average Directional Rating (ADXR): Simple average of todays ADX and the ADX from 14 or n periods previously.
+
+The ADX is relative to its own asset price. An ADX of 60 for $Asset_{i}$ is different to an ADX for $Asset_{j}$.
+
+Using the `TTR` package along with the `tidyquant` package in R we can calculate the `ADX` using:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+# adx_calc <- asset_prices %>% 
+#   group_by(symbol) %>% 
+#   tq_mutate(
+#     select = c("high", "low", "close"),
+#     mutate_fun = ADX,
+#     n = 14,
+#     maType = "SMA"
+#     )
+
+# adx_calc %>% 
+#   group_by(symbol) %>% 
+#   drop_na() %>% 
+#   slice(1:5)
+```
+
+The first few observations of each of the assets looks like:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+# adx_calc %>% 
+#   group_by(symbol) %>% 
+#   drop_na() %>% 
+#   slice(1:2) %>% 
+#   kable() %>%
+#   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Where the newely created columns are defined as:
+
+- `DIp`: Directional Index positive
+- `DIn`: Directional Index negative
+- `DX`: Directional Index
+- `ADX`: Average Directional Index which takes on values between 0 and 100
+
+As defined previously.
+
+```{r table2, echo=FALSE, message=FALSE, warnings=FALSE, results='asis'}
+tabl <- "  # ADX Trend Strength
+| ADX Value     | Strength      | 
+|---------------|:-------------:|
+| 0-25          | Weak Trend    |
+| 26-50         | Strong Trend  |
+| 51-75         | Very Strong   |
+| 76-100        | Strongestng   |
+"
+cat(tabl) # output the table in a format good for HTML/PDF/docx conversion
+```
+
+We can plot the ADX using the following, where I first put the Directional Index columns to longer format using the `pivot_longer` function and then take a random sample of the grouped data using a combination of `group_by`, `nest` and `sample_n`. Finally I filter the data between a period of 3 months and use `ggplot` to plot the data.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+
+# adx_calc %>% 
+#   pivot_longer(
+#     cols = c("DIp", "DIn", "ADX"),
+#     names_to = "Indicator",
+#     values_to = "Indicator_value"
+#     ) %>%  
+#   group_by(symbol) %>%
+#   nest() %>%
+#   ungroup() %>% 
+#   sample_n(2) %>%
+#   unnest() %>% 
+#   filter(date > "2014-09-01" & date < "2015-01-01") %>% 
+#   ggplot(aes(x = date, y = Indicator_value, color = Indicator)) +
+#   geom_line() +
+#   geom_dl(aes(label = Indicator), method = list(dl.combine("first.points", "last.points"))) +
+#   facet_wrap(~symbol, scales = "free") +
+#   theme_tq()
+```
+
+We can create a simple trading strategy based on the `ADX` by:
+
+- Adding a buy signal when the `DIp` is greater than the `DIn` and also when the `ADX` is greater than 30.
+- We will hold the asset until the `DIp` is less than the `DIn`.
+- This creates multiple consecutive rows of `1`'s followed by consecutive rows of `-1`'s. Since we cannot "buy", "buy" and "buy" and then followed by "sell", "sell" and "sell" we will only take the first occurrence of the first "buy" and the first "sell". I call this `buy_here` and `sell_here`.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+# adx_signals <- adx_calc %>% 
+#   mutate(
+#     adx_signal_buy = case_when(
+#       DIp > DIn & ADX > 30 ~ 1,
+#       TRUE ~ 0
+#       ),
+#     adx_signal_buy_hold_until = case_when(
+#       DIp < DIn ~ -1,
+#       TRUE ~ 0
+#       )
+#     ) %>% 
+#   group_by(grp = rleid(adx_signal_buy)) %>% 
+#   mutate(buy_here = +(all(adx_signal_buy == 1) * row_number() == 1)) %>%
+#   ungroup %>%
+#   group_by(grp = rleid(adx_signal_buy_hold_until)) %>%
+#   mutate(sell_here = -1 *(all(adx_signal_buy_hold_until == -1) * row_number() == 1)) %>%
+#   ungroup %>%
+#   select(-grp)
+```
+

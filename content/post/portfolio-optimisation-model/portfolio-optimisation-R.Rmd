@@ -1,0 +1,709 @@
+---
+authors:
+- admin
+date: "2019-12-31"
+layout: post
+title: "Quantitative Analytics: Optimal Portfolio Allocation"
+subtitle: A number of portfolio optimisation models in R
+summary: I cover a number of portfolio optimisation models using R from the literature, the portfolio allocation models might be extended to the Black-Litterman model etc.
+
+
+categories: [Portfolio Optimisation, Econometrics]
+projects: [Quantitative Finance]
+tags: [finance, quant finance, yahoo-finance, portfolio optimisation, asset pricing, quantstrat]
+
+comments: true
+draft: false
+featured: false
+featuredImage: "plot_thumb.jpg"
+
+# bibliography: mybibml.bib
+# link-citations: yes
+
+output:
+  html_document:
+    toc: true
+    number_sections: true
+    fig_width: 20
+    fig_height: 20
+    fig_caption: true
+    df_print: paged
+    code_folding: hide
+
+---
+  
+  
+```{r setup, include = FALSE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(kableExtra)
+options(scipen=999)
+```
+
+
+```{r include = FALSE, message = FALSE, warning = FALSE}
+options(scipen=999)
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(kableExtra)
+library(rsample)
+library(tsibble)
+library(tidyverse)
+library(tidyquant)
+library(timetk)
+library(CVXR)
+library(viridis)
+library(data.table)
+library(purrr)
+```
+
+# Introduction: {.tabset .tabset-fade .tabset-pills}
+
+The literature in portfolio optimisation has been around for decades. In this post I cover a number of traditional portfolio optimisation models. The general aim is to select a portfolio of assets out of a set of all possible portfolios being considered with a defined objective function.
+
+## The data:
+
+The data is collected using the `tidyquant()` package's `tq_get()` function. I then convert the daily asset prices to daily log returns using the `periodReturn` function from the `quantmod()` package. Next I construct `lists` of 6 months worth of daily returns using the `rolling_origin()` function from the `rsample()` package. The objective is to compute on a rolling basis the 6 month mean returns `mus` and the 6 month covariance matrices `Sigmas` on the training sets (i.e. 6 months) and apply them on the test sets (i.e. 1 month later) - monthly rebalancing. 
+
+Just as with the returns data, the same is applied to the monthly prices data.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = TRUE}
+start_date <- "2013-01-01"
+end_date <- "2017-08-31"
+symbols <- c("AAPL", "ABBV", "A",  "APD", "AA", "CF", "NVDA", "HOG", "WMT", "AMZN"
+            #,"MSFT", "F", "INTC", "ADBE", "AMG", "AKAM", "ALB", "ALK"
+            )
+
+portfolio_prices <- tq_get(
+  symbols,
+  from = start_date,
+  to = end_date,
+) %>% 
+  select(symbol, date, adjusted)
+
+
+portfolio_monthly_returns <- portfolio_prices %>% 
+  group_by(symbol) %>% 
+  tq_transmute(
+    select = adjusted,
+    mutate_fun = periodReturn,
+    period = "daily",                              
+    type = "log",
+  ) %>% 
+  pivot_wider(names_from = symbol, values_from = daily.returns) %>% 
+  mutate(year_month = yearmonth(date)) %>% 
+  nest(-year_month) %>% 
+  rolling_origin(
+    initial = 6,
+    assess = 1,
+    skip = 0,
+    cumulative = FALSE)
+
+
+portfolio_monthly_prices <- portfolio_prices %>%
+  pivot_wider(names_from = symbol, values_from = adjusted) %>% 
+  mutate(year_month = yearmonth(date)) %>% 
+  nest(-year_month) %>% 
+  rolling_origin(
+    initial = 6,
+    assess = 1,
+    skip = 0,
+    cumulative = FALSE)
+
+ListNamesDates <- map(portfolio_monthly_returns$splits, ~assessment(.x) %>%
+                        select(year_month)) %>%
+  plyr::ldply(., data.frame) %>% 
+  pull(year_month)
+
+#########
+
+# Goal is to define the mean and covariance matrix on the training sets and apply them on the test sets - monthly rebalancing
+
+mus <- map(portfolio_monthly_returns$splits, ~ analysis(.x) %>% 
+             unnest(data) %>%
+             select(-year_month, -date) %>%
+             colMeans) %>%
+  setNames(c(ListNamesDates))
+
+Sigmas <- map(portfolio_monthly_returns$splits, ~ analysis(.x) %>%
+                unnest() %>%
+                tk_xts(., date_var = date) %>%
+                cov(.)) %>% 
+  setNames(c(ListNamesDates))
+```
+
+## Price and Returns data
+
+The returns data for the first `split` looks like the following:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+map(portfolio_monthly_returns$splits, ~ analysis(.x) %>%
+      unnest() %>%
+      tk_xts(., date_var = date))[[1]] %>% 
+  head() %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+## The statistics
+
+The `Mus` (mean returns) data looks like:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+mus[1] %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+The `Sigmas` (covariance matrix) data looks like:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+Sigmas[1] %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+# Comparing Portfolio Optimisation {.tabset .tabset-fade .tabset-pills}
+
+## Global Minimum Variance Portfolio
+
+The global minimum-variance portfolio $w^{gmv}$ is a portfolio of assets with gives us the lowest possible return variance or portfolio volatility. Volatility here is used as a replacement for risk, thus with less variance in volatility correlates to less risk in an asset. The portfolio focuses only on risk and ignores expected returns.
+
+The objective function is;
+
+
+$$\begin{eqnarray} \min_{w} w^{T} \Sigma w \\
+\text{subject to } 1^{T}w = 1 \\
+w \ge 0 \end{eqnarray}$$
+
+Since $\Sigma$ is unknown we can estimate it as $\hat{\Sigma}$ with the covariance matrix. In which the convex solution becomes:
+
+$$W = \dfrac{1}{1^{T}\hat{\Sigma}^{-1}1}\hat{\Sigma}^{-1}1$$
+The objective is that we want to find the optimial weights from the model such that our risk is minimised.
+
+The below problem consists of our $Minimisation$ problem $\min_{w} w^{T} \Sigma w$. The `quad_form` function takes the quadratic form $x^T Px$ where $x$ is a vector and $P$ is a matrix or in our case $w$ is our weights vector and $\Sigma$ is the covariance matrix for $A_{1}, \dots, A_{5}$. The `constraints` correspond to $1^{T}w = 1$ in which we cannot assign negative weights to our assets and that we invest all our capital in the portfolio.  
+
+We can use the Disciplined Convex Programming (`CVXR`) package in R, which;
+
+- Analyses the problem,
+
+- Verifies the convexity,
+
+- Converts the problem into canonical form,
+
+- Solves the problem.
+
+We want to find the optimial weights from the model such that our risk is minimised. We can do this by solving the optimisation problem, bind the lists into a single data frame and use `ggplot2` to plot the rolling one month out of sample optimal portfolio weights - based on the previous 6 months rolled `mus` and `Sigmas`.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = TRUE}
+# 1) Function: Global Minimum Variance Portfolio
+GMVPportolioFunction <- function(Sigma) {
+  w <- Variable(nrow(Sigma))
+  problem <- Problem(               # Initialise the problem
+    Minimize(                       # minimse or maximise objective function
+      quad_form(
+        w, Sigma                    # Model inputs, the number of weights to consider and the covariance matrix
+        )
+      ), 
+    constraints = list(
+      w >= 0,                       # First model constraint
+      sum(w) == 1))                 # Second model constrain
+  Solution <- solve(problem, solver="SCS")        # Solves the problem
+  return(as.vector(Solution$getValue(w)))
+}
+
+# 1a) Portfolio GMVP
+GMVPPortfolio <- map(
+  .x = Sigmas,
+  GMVPportolioFunction)
+
+# 1b) Portfolio GMVP
+GMVPPortfolioWeights <- setNames(GMVPPortfolio, ListNamesDates) %>% 
+  map(.,  ~setNames(., c(symbols))) %>% 
+  map_dfr(., ~bind_rows(.), .id = "date") %>% 
+  mutate(date = as.Date(paste(date, "01"), format = "%Y %b %d"))
+
+GMVPPortfolioWeights %>%
+  head() %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = TRUE}
+# 1c) Portfolio GMVP
+GMVPPortfolioWeights %>% 
+  select(date, everything()) %>% 
+  pivot_longer(cols = 2:ncol(.), values_to = "weights") %>% 
+  ggplot(aes(fill = name, y = weights, x = date)) + 
+  geom_bar(position = "stack", stat = "identity", width = 100) +
+  scale_fill_viridis(option = "magma", discrete = TRUE, name = "Asset") +
+  theme_bw() +
+  ggtitle("GMVP Rolling Portfolio Adjustments") +
+  xlab("Date") +
+  ylab("Weights")
+```
+
+## Markowitz Portfolio
+
+The Markowitz Mean-Variance Portfolio is constructed as follows:
+
+$$\begin{eqnarray} \max_{w} \mu^{T}w - \lambda w^{T}\Sigma w \\
+\text{subject to } 1^{T}w = 1 \\
+w \ge 0 \end{eqnarray}$$
+
+We can set different risk parameters by adjusting $\lambda$ and see how the returns are affected. This can be done by running multiple optimisation problems on the data with different $\lambda$ values. Higher $\lambda$ values places emphasis on the right hand side of the equation and thus the more risk adverse the investor is.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = TRUE}
+# 2) Function: Markowitz Portfolio
+MarkowitzportolioFunction <- function(mu, Sigma, lmd) {
+  w <- Variable(nrow(Sigma))
+  problem <- Problem(
+    Maximize(t(mu) %*% w - lmd*quad_form(w, Sigma)),
+    constraints = list(
+      w >= 0, 
+      sum(w) == 1)
+  )
+  Solution <- solve(problem)
+  return(as.vector(Solution$getValue(w)))
+}
+
+# 2a) Portfolio Markowitz
+lmd <- c(0.25, 0.5, 0.75)
+MarkowitzPortfolio <- map(lmd,
+                          ~map2(
+                            .x = mus,
+                            .y = Sigmas,
+                            MarkowitzportolioFunction, lmd = .x))
+
+# 2b) Portfolio Markowitz
+MarkowitzPortfolioWeights <- setNames(MarkowitzPortfolio, lmd) %>% 
+  map(., ~setNames(., c(ListNamesDates))) %>% 
+  map(., ~map(., ~setNames(., c(symbols)))) %>% 
+  map(., ~map_dfr(., ~bind_rows(.), .id = "date")) %>% 
+  map_dfr(., ~bind_rows(.), .id = "lambda") %>% 
+  mutate(date = as.Date(paste(date, "01"), format = "%Y %b %d"))
+
+MarkowitzPortfolioWeights %>%
+  head() %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+We can see how the risk and return is affected by the changes in the $\lambda$ values in the following plot. As the $\lambda$ values increase the less risk we take on but also we assume less returns. Low values of $\lambda$ makes us invest in a signle asset with the weight on asset $A_{5}$, increasing the $\lambda$ values increases the weights in other assets $A_{i}$ spreading our risk.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = TRUE}
+# 2c) Portfolio Markowitz
+MarkowitzPortfolioWeights %>% 
+  select(date, lambda, everything()) %>% 
+  pivot_longer(cols = 3:ncol(.), values_to = "weights") %>% 
+  ggplot(aes(fill = name, y = weights, x = date)) + 
+  geom_bar(position = "stack", stat = "identity", width = 100) +
+  facet_wrap(~lambda, ncol = 1) +
+  scale_fill_viridis(option = "magma", discrete = TRUE, name = "Asset") +
+  theme_bw() +
+  ggtitle("Markowitz Rolling Portfolio Adjustments",
+          subtitle = "For different Lambda Risk Values") +
+  xlab("Date") +
+  ylab("Weights")
+```
+
+## Max Sharpe Ratio 
+
+**Note:** I originally made this post a few months back and when I went back to it some of the parts for the Max-Sharpe Ratio portfolio did not work as before - I think this is due to the recent update in the `tidyr` package. I made some minor adjustments, however this part of the post is incorrect (just look at the portfolio weights plot). I hightlight in the code when I made the minor adjustments - when I have the opportunity to go back through the code more carefully I will - 
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = TRUE}
+# 2) Function: Max Sharpe Ratio 
+#NOTE::: When we have all negative mus for a given month we obtain an NA value - the function 
+# cannot find a maximum when all mus are negative compare the MaxSharpePortfolio$`2015 Sep` and
+# MaxSharpePortfolio$`2015 Oct` along with the mus$`2015 Sep` and mus$`2015 Oct` we invests 99% of the portfolio
+# in Sept in ABBV since its positive. In Oct ABBV mu is negative and we cannot invest at all.
+# Increasing the universe of Assets may overcome this problem.
+MaxSharpeportolioFunction <- function(mu, Sigma) {
+  w <- Variable(nrow(Sigma))
+  problem <- Problem(
+    Minimize(quad_form(w, Sigma)),
+    constraints = list(
+      w >= 0, t(mu) %*% w == 1)
+  )
+  Solution <- solve(problem, solver="SCS")
+  return(as.vector(Solution$getValue(w)/sum(Solution$getValue(w))))
+}
+
+# 3a) Portfolio Max Sharpe Ratio                                 
+MaxSharpePortfolio <- purrr::map2(.x = mus,
+                                  .y = Sigmas,
+                                  .f = ~MaxSharpeportolioFunction(.x, .y))
+
+# 3b) Portfolio Max Sharpe Ratio
+  MaxSharpePortfolioWeights <- setNames(MaxSharpePortfolio, ListNamesDates) %>%
+    as_tibble(.) %>%               # Made an adjustment here
+    map(.,  ~setNames(., c(symbols))) %>% 
+    map_dfr(., ~bind_rows(.), .id = "date") %>% 
+    mutate(date = as.Date(paste(date, "01"), format = "%Y %b %d"))
+
+MaxSharpePortfolioWeights %>%
+  head() %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = TRUE}
+# 3c) Portfolio Max Sharpe Ratio
+MaxSharpePortfolioWeights %>% 
+  select(date, everything()) %>%      # Made an adjustment here
+  pivot_longer(cols = 2:ncol(.), values_to = "weights") %>% 
+  ggplot(aes(fill = name, y = weights, x = date)) + 
+  geom_bar(position = "stack", stat = "identity", width = 100) +
+  scale_fill_viridis(option = "magma", discrete = TRUE, name = "Asset") +
+  theme_bw() +
+  ggtitle("Maximum Sharpe Ratio Rolling Portfolio Adjustments") +
+  xlab("Date") +
+  ylab("Weights")
+```
+
+## Mu Quintile Portfolio
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = TRUE}
+# 1a)
+mu_quintiles <- map(mus, ~ntile(., 5) %>% 
+                      setNames(c(symbols))) %>% 
+  map(., ~sort(., decreasing = TRUE))
+
+# 2)       
+mu_diag_sigma <- map2(
+  .x = mus,
+  .y = Sigmas,
+  ~.x / diag(.y)) 
+
+mu_diag_sigma_quintiles <- mu_diag_sigma %>% 
+  map(., ~ntile(., 5)) %>% 
+  map(., ~setNames(., c(symbols))) %>% 
+  map(., ~sort(., decreasing = TRUE))
+
+# 1b) rank the quintiles by mu
+quintiles_mu <- map2(
+  .x = mus,
+  .y = mu_quintiles,
+  ~bind_rows(.x, .y))
+
+quintiles_mu_weights <- map(quintiles_mu, ~ .x %>%
+                              mutate_all(~ case_when(. %in% c(5, 1) ~ .5, 
+                                                     TRUE ~ 0)) %>%
+                              pmap_dfr(., ~ 
+                                         {v1 <- c(...)
+                                         v2 <- if(sum(v1) > 1) replace(v1, v1 != 0, 1/sum(v1!=0)) else v1
+                                         as.list(v2)}))
+
+
+quintiles_mu_weights <- map(quintiles_mu_weights, ~.x[-1,]) %>% 
+  map2(.x = quintiles_mu, .y = ., ~bind_rows(.x, .y))
+
+QuintileMuWeights <- map(quintiles_mu_weights, ~.x[3, ]) %>%  # The weights are stored in row 3.
+  map_dfr(., ~bind_rows(.), .id = "date") %>% 
+  mutate(date = as.Date(paste(date, "01"), format = "%Y %b %d"))
+
+QuintileMuWeights %>%
+  head() %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = TRUE}
+QuintileMuWeights %>% 
+    select(date, everything()) %>%
+  pivot_longer(cols = 2:ncol(.), values_to = "weights") %>% 
+  ggplot(aes(fill = name, y = weights, x = date)) + 
+  geom_bar(position = "stack", stat = "identity", width = 100) +
+  scale_fill_viridis(option = "magma", discrete = TRUE, name = "Asset") +
+  theme_bw() +
+  ggtitle("Quintile MU Rolling Portfolio Adjustments") +
+  xlab("Date") +
+  ylab("Weights")
+```
+
+## Mu / Diag(Sigma) Portfolio
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = TRUE}
+# 2a) 
+mu_diag_sigma <- map2(
+  .x = mus,
+  .y = Sigmas,
+  ~.x / diag(.y)) 
+
+mu_diag_sigma_quintiles <- mu_diag_sigma %>% 
+  map(., ~ntile(., 5)) %>% 
+  map(., ~setNames(., c(symbols))) %>% 
+  map(., ~sort(., decreasing = TRUE))
+
+# 2b) rank the quintiles by mu / diag(Sigma)
+quintiles_mu_diag_sigma <- map2(
+  .x = mu_diag_sigma,
+  .y = mu_diag_sigma_quintiles,
+  ~bind_rows(.x, .y))
+
+quintiles_mu_diag_sigma_weights <- map(quintiles_mu_diag_sigma, ~ .x %>%
+                                         mutate_all(~ case_when(. %in% c(5, 1) ~ .5, 
+                                                                TRUE ~ 0)) %>%
+                                         pmap_dfr(., ~ 
+                                                    {v1 <- c(...)
+                                                    v2 <- if(sum(v1) > 1) replace(v1, v1 != 0, 1/sum(v1!=0)) else v1
+                                                    as.list(v2)}))
+
+quintiles_mu_diag_sigma_weights <- map(quintiles_mu_diag_sigma_weights, ~.x[-1,]) %>% 
+  map2(.x = quintiles_mu_diag_sigma, .y = ., ~bind_rows(.x, .y))
+
+QuintileMuDiagSigmaWeights <- map(quintiles_mu_diag_sigma_weights, ~.x[3, ]) %>% # The weights are stored in row 3.
+  map_dfr(., ~bind_rows(.), .id = "date") %>% 
+  mutate(date = as.Date(paste(date, "01"), format = "%Y %b %d"))
+
+QuintileMuDiagSigmaWeights %>%
+  head() %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = TRUE}
+
+QuintileMuDiagSigmaWeights %>% 
+  select(date, everything()) %>%
+  pivot_longer(cols = 2:ncol(.), values_to = "weights") %>% 
+  ggplot(aes(fill = name, y = weights, x = date)) + 
+  geom_bar(position = "stack", stat = "identity", width = 100) +
+  scale_fill_viridis(option = "magma", discrete = TRUE, name = "Asset") +
+  theme_bw() +
+  ggtitle("Quintile MU Diag Sigma Rolling Portfolio Adjustments") +
+  xlab("Date") +
+  ylab("Weights")
+
+```
+
+## Mu / Diag(sqrt(Sigma)) Portfolio
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = TRUE}
+# 3a)
+mu_diag_sqrt_sigma <- map2(
+  .x = mus,
+  .y = Sigmas,
+  ~.x / sqrt(diag(.y)))  
+
+mu_diag_sqrt_sigma_quintiles <- mu_diag_sqrt_sigma %>% 
+  map(., ~ntile(., 5)) %>% 
+  map(., ~setNames(., c(symbols))) %>% 
+  map(., ~sort(., decreasing = TRUE))
+
+# 3b) rank the quintiles by mu / sqrt(diag(sigma))
+
+quintiles_mu_diag_sqrt_sigma <- map2(
+  .x = mu_diag_sqrt_sigma,
+  .y = mu_diag_sqrt_sigma_quintiles,
+  ~bind_rows(.x, .y))
+
+quintiles_mu_diag_sqrt_sigma_weights <- map(quintiles_mu_diag_sqrt_sigma, ~ .x %>%
+                                         mutate_all(~ case_when(. %in% c(5, 1) ~ .5, 
+                                                                TRUE ~ 0)) %>%
+                                         pmap_dfr(., ~ 
+                                                    {v1 <- c(...)
+                                                    v2 <- if(sum(v1) > 1) replace(v1, v1 != 0, 1/sum(v1!=0)) else v1
+                                                    as.list(v2)}))
+
+quintiles_mu_diag_sqrt_sigma_weights <- map(quintiles_mu_diag_sqrt_sigma_weights, ~.x[-1,]) %>% 
+  map2(.x = quintiles_mu_diag_sqrt_sigma, .y = ., ~bind_rows(.x, .y))
+
+QuintileMuDiagSqrtSigmaWeights <- map(quintiles_mu_diag_sqrt_sigma_weights, ~.x[3, ]) %>% # The weights are stored in row 3.
+  map_dfr(., ~bind_rows(.), .id = "date") %>% 
+  mutate(date = as.Date(paste(date, "01"), format = "%Y %b %d"))
+
+QuintileMuDiagSqrtSigmaWeights %>%
+  head() %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = TRUE}
+QuintileMuDiagSqrtSigmaWeights %>% 
+  select(date, everything()) %>%
+  pivot_longer(cols = 2:ncol(.), values_to = "weights") %>% 
+  ggplot(aes(fill = name, y = weights, x = date)) + 
+  geom_bar(position = "stack", stat = "identity", width = 100) +
+  scale_fill_viridis(option = "magma", discrete = TRUE, name = "Asset") +
+  theme_bw() +
+  ggtitle("Quintile MU Diag Sqrt(Sigma) Rolling Portfolio Adjustments") +
+  xlab("Date") +
+  ylab("Weights")
+  
+```
+
+
+# Analysis of Results {.tabset .tabset-fade .tabset-pills}
+
+There are 8 different portfolio optimisation models. Putting all the data together, it's easier to inspect the results.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = TRUE}
+############################# Assess the Returns ##################################
+MonthlyReturns <- map(portfolio_monthly_prices$splits, ~assessment(.x)) %>% 
+  map(., ~unnest(.x, data) %>% 
+        select(-year_month) %>% 
+        tk_xts(date_var = date) %>% 
+        lapply(., periodReturn, period = "monthly")) %>% 
+  setNames(., ListNamesDates) %>% 
+  map(., ~data.frame(.)) %>% 
+  bind_rows(., .id = "date") %>% 
+  mutate(date = as.Date(paste(date, "01"), format = "%Y %b %d")) %>% 
+  tk_xts(., date_var = date)
+
+############# Assess the Monthly Portfolio Returns Depeninding on Weights #########
+
+# 1d)
+TS_GMVPPortfolioWeights <- GMVPPortfolioWeights %>% 
+  tk_xts(., date_var = date)
+
+PortRets_GMVP <- Return.portfolio(MonthlyReturns, weights = TS_GMVPPortfolioWeights) %>% 
+  setNames(c("GMVP"))
+
+
+# 2d)
+TS_MarkowitzPortfolioWeights <- MarkowitzPortfolioWeights %>% 
+  group_split(lambda) %>% 
+  setNames(c(lmd)) %>% 
+  map(., ~tk_xts(., select = -lambda, date_var = date))
+
+MarkowitzWeightedPortfolioReturnsFunction <- function(lmd){
+  WeightedReturns = Return.portfolio(MonthlyReturns, weights = TS_MarkowitzPortfolioWeights[[lmd]])
+  return(fortify.zoo(WeightedReturns))
+}
+
+PortRets_Markowitz <- lapply(seq(1:length(lmd)), MarkowitzWeightedPortfolioReturnsFunction) %>% 
+  setNames(c(lmd)) %>%
+  bind_rows(., .id = "lmd") %>% 
+  #column_to_rownames("Index") %>% 
+  #select(-matches("Index")) %>% 
+  #rownames_to_column("Index") %>% 
+  mutate(Index = as.Date(Index),
+         lmd = as.numeric(lmd)) %>% 
+  pivot_wider(names_from = lmd, values_from = portfolio.returns) %>% 
+  tk_xts(date_var = Index) %>% 
+  setNames(c(paste("Markowitz Lambda", lmd)))
+
+# 3d)
+TS_MaxSharpePortfolioWeights <- MaxSharpePortfolioWeights %>% 
+  tk_xts(., date_var = date)
+
+PortRets_MaxSharpe <- Return.portfolio(MonthlyReturns, weights = TS_MaxSharpePortfolioWeights) %>% 
+  setNames(c("MaxSharpe"))
+
+
+# 4) quintile mu
+
+TS_QuintileMuWeights <- QuintileMuWeights %>% 
+  tk_xts(., date_var = date)
+
+PortRets_Mu_Quintiles <- Return.portfolio(MonthlyReturns, weights = TS_QuintileMuWeights) %>% 
+  setNames(c("Mu_Quintiles"))
+
+# 4) quintile mu diag sigma
+
+TS_QuintileMuDiagSigmaWeights <- QuintileMuDiagSigmaWeights %>% 
+  tk_xts(., date_var = date)
+
+PortRets_MuDiagSigma_Quintiles <- Return.portfolio(MonthlyReturns, weights = TS_QuintileMuDiagSigmaWeights) %>% 
+  setNames(c("MuDiagSigma_Quintiles"))
+
+# 4) Quintile mu diga sqrt sigma
+
+TS_QuintileMuDiagSqrtSigmaWeights <- QuintileMuDiagSqrtSigmaWeights %>% 
+  tk_xts(., date_var = date)
+
+PortRets_MuDiagSqrtSigma_Quintiles <- Return.portfolio(MonthlyReturns, weights = TS_QuintileMuDiagSqrtSigmaWeights) %>% 
+  setNames(c("MuDiagSqrtSigma_Quintiles"))
+
+#####################################################################################
+```
+
+Looking at the plots the Global Minimum Variance Portfolio shows the lowest volatility in the portfolio returns. The Max Sharpe portfolio is clearly wrong here (see, previous point on Max Sharpe Ratio section). The annaulised performance metrics are also displayed at the bottom for each portfolio over the period.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = TRUE}
+########## Assess the Annualised Returns based on portfolio weights ##################
+AllReturns <- cbind(PortRets_GMVP, PortRets_Markowitz, PortRets_MaxSharpe, PortRets_Mu_Quintiles,
+                    PortRets_MuDiagSigma_Quintiles, PortRets_MuDiagSqrtSigma_Quintiles)
+                    
+library(data.table)
+AllReturns %>%
+  data.table(keep.rownames = TRUE) %>%
+  as_tibble() %>% 
+  pivot_longer(cols = 2:ncol(.)) %>% 
+  ggplot(aes(x = index, y = value, color = name)) +
+  geom_line() +
+  facet_wrap(~name, ncol = 2) +
+  ggtitle("Portfolio Returns", subtitle = "With portfolio optimised weights") +
+  xlab("Returns") +
+  ylab("Date") +
+  theme_tq()
+
+AnnualMetrics <- bind_cols(table.AnnualizedReturns(PortRets_GMVP) %>% 
+                          rownames_to_column("Metric"),
+                        table.AnnualizedReturns(PortRets_Markowitz),
+                        table.AnnualizedReturns(PortRets_MaxSharpe),
+                        table.AnnualizedReturns(PortRets_Mu_Quintiles),
+                        table.AnnualizedReturns(PortRets_MuDiagSigma_Quintiles),
+                        table.AnnualizedReturns(PortRets_MuDiagSqrtSigma_Quintiles)
+                        )
+
+AnnualMetrics %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+Plotting the cumulative returns shows that the Markowitz lambda portfolios have the highest returns over the period, however they also have the highest standard deviation over the same period.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = TRUE}
+chart.CumReturns(AllReturns, main = "Weighted Returns by Objective Function and Risk Tolerance",
+                 wealth.index = TRUE, legend.loc = "topleft", colorset = rich6equal)
+
+charts.PerformanceSummary(AllReturns, main = "Performance for Different Weighted Assets", 
+                          wealth.index = TRUE, colorset = rich6equal)
+```
+
+### Additional
+
+(Some additional test data I leave here for future reference)
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = TRUE}
+data <- data.frame(
+  A_1 = c(2.3, 0.93, 0.62, 0.74, -0.23),
+  A_2 = c(0.93, 1.40, 0.2, 0.56, 0.26),
+  A_3 = c(0.62, 0.2, 1.80, 0.78, -0.27),
+  A_4 = c(0.74, 0.56, 0.78, 3.4, -0.56),
+  A_5 = c(-0.23, 0.26, -0.27, -0.56, 2.60),
+  Security = c(1, 2, 3, 4, 5),
+  R_i = c(15.1, 12.5, 14.7, 9.02, 17.68)
+)
+
+Sigma <- data[, 1:5]
+w <- Variable(nrow(data))
+mu <- data[, 7]
+n_samples = 10
+lambdas <- 10^seq(-2, 3, length.out = n_samples)
+
+ret_data <- rep(0, n_samples)
+risk_data <- rep(0, n_samples)
+w_data <- matrix(0, nrow = n_samples, ncol = nrow(data))
+
+for(i in seq_along(lambdas)) {
+  lambda <- lambdas[i]
+  problem <- Problem(
+    Maximize(
+      t(mu) %*% w - lambda*quad_form(w, Sigma)
+    ),
+    constraints = list(w >= 0, sum(w) == 1))
+  solution <- solve(problem)
+  w_data[i,] <- solution$getValue(w)
+  risk_data[i] <- solution$getValue(sqrt(quad_form(w, Sigma)))
+  ret_data[i] <- solution$getValue(t(mu) %*% w)
+}
+
+ggplot() +
+  geom_line(mapping = aes(x = risk_data, y = ret_data), color = "blue") +
+  geom_point(mapping = aes(x = sqrt(diag(as.matrix(Sigma))), y = mu), color = "red")
+```

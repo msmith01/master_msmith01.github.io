@@ -1,0 +1,382 @@
+---
+title: "Need for Funds (NFO) and Working Capital (WC) Calculations"
+author: ~
+date: '2019-09-25'
+subtitle: 'I calculate the Need for Funds and Working Capital for a number of companies and analyse the results'
+summary: 'I use managerial finance and corporate finance methods to scape and analyse fundamental data from yhaoo and analyse companies DuPont, NFO and WC'
+
+categories: [Finance]
+projects: [Finance]
+tags: [finance, yahoo finance, corporate finance, managerial finance, dupont]
+
+output:
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(scipen=999)
+```
+
+#### Corporate Finance and Managerial Finance
+
+I created a script to download any company from Yahoo Finance and compute the *DuPont*, *Need for Funds* and *Working Capital* based on companies fundamentals and plot these for each company. I suggest you first watch these two short videos from IESE Business School - part 1 [here](https://www.coursera.org/lecture/operational-finance/4-need-of-funds-nfo-and-working-capital-wc-cRBRP) and part 2 [here](https://www.coursera.org/lecture/operational-finance/5-need-of-funds-nfo-and-working-capital-wc-continued-hxJP6).
+
+
+Firstly load in some packages:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+library(knitr)
+library(kableExtra)
+library(tidyquant)
+library(quantmod)
+library(tibble)
+library(tidyr)
+library(reshape2)
+library(ggplot2)
+library(rvest)
+```
+
+
+I first define the function to scrape Yahoo Finance and collect the Balance Sheet, Income Statement and Cash Flows (it looks complicated but it works):
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+getFin <- function(stock){
+  for (i in 1:length(stock)) {
+    tryCatch(
+      {
+        # Collect the Income Statement data
+        link <- "https://finance.yahoo.com/quote/"
+        link <- paste0(link, stock[i], "/financials?p=", stock[i])
+        wahis.session <- html_session(link)
+        p <- wahis.session %>%
+          html_nodes(xpath = '//*[@id="Col1-1-Financials-Proxy"]/section/div[3]/table')%>%
+          html_table(fill = TRUE)
+        IncomeStatement <- p[[1]]
+        colnames(IncomeStatement) <- paste(IncomeStatement[1,])
+        IncomeStatement <- IncomeStatement[-c(1,5,12,20,25),]
+        names_row <- paste(IncomeStatement[,1])
+        IncomeStatement <- IncomeStatement[,-1]
+        IncomeStatement <- apply(IncomeStatement, 2, function(x){gsub(",","",x)})
+        IncomeStatement <- as.data.frame(apply(IncomeStatement, 2, as.numeric))
+        rownames(IncomeStatement) <- paste(names_row)
+        temp1 <- IncomeStatement
+        
+        # Collect the Balance Sheet data
+        link <- "https://finance.yahoo.com/quote/"
+        link <- paste0(link, stock[i],"/balance-sheet?p=", stock[i])
+        wahis.session <- html_session(link)
+        p <- wahis.session %>%
+          html_nodes(xpath = '//*[@id="Col1-1-Financials-Proxy"]/section/div[3]/table')%>%
+          html_table(fill = TRUE)
+        BalanceSheet <- p[[1]]
+        colnames(BalanceSheet) <- BalanceSheet[1,]
+        BalanceSheet <- BalanceSheet[-c(1,2,17,28),]
+        names_row <- BalanceSheet[,1]
+        BalanceSheet <- BalanceSheet[,-1]
+        BalanceSheet <- apply(BalanceSheet, 2, function(x){gsub(",","",x)})
+        BalanceSheet <- as.data.frame(apply(BalanceSheet, 2, as.numeric))
+        rownames(BalanceSheet) <- paste(names_row)
+        temp2 <- BalanceSheet
+        
+        # Collect the Cash Flow data
+        link <- "https://finance.yahoo.com/quote/"
+        link <- paste0(link, stock[i], "/cash-flow?p=", stock[i])
+        wahis.session <- html_session(link)
+        p <- wahis.session %>%
+          html_nodes(xpath = '//*[@id="Col1-1-Financials-Proxy"]/section/div[3]/table')%>%
+          html_table(fill = TRUE)
+        CashFlow <- p[[1]]
+        colnames(CashFlow) <- CashFlow[1,]
+        CashFlow <- CashFlow[-c(1,3,11,16),]
+        names_row <- CashFlow[,1]
+        CashFlow <- CashFlow[,-1]
+        CashFlow <- apply(CashFlow, 2, function(x){gsub(",","",x)})
+        CashFlow <- as.data.frame(apply(CashFlow, 2, as.numeric))
+        rownames(CashFlow) <- paste(names_row)
+        temp3 <- CashFlow
+        
+        assign(paste0(stock[i],'.f'),value = list(IncomeStatement = temp1, BalanceSheet = temp2, CashFlow = temp3), envir = parent.frame())
+        },
+      error = function(cond){
+        message(stock[i], "Give error ",cond)
+        }
+      )
+  }
+}
+```
+
+Next I collect some tickers, I choose `Ford`, `General Electric`, `International Business Machine` and `Unilever` but feel free to add in more tickers - what ever financial data can be found on Yahoo Finance will work- just add to the `symbols` part of the code.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+symbols <- c("F", "GE", "IBM", "UN")
+getFin(symbols)
+symbols.f <- sapply(symbols, function(x) { paste0(x, ".f") })
+
+tickers <- list2env(mget(symbols.f))
+
+IS <- lapply(tickers, "[[", "IncomeStatement")
+BS <- lapply(tickers, "[[", "BalanceSheet")
+CF <- lapply(tickers, "[[", "CashFlow")
+
+IS <- as.data.frame(IS)
+BS <- as.data.frame(BS)
+CF <- as.data.frame(CF)
+```
+
+Where `IS` is Income Statement, `BS` is Balance Sheet` and `CF` is Cash Flow.
+
+#### How the Income Statement looks:
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+IS %>%
+  kable(caption = "Income Statement") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+#### How the Balance Sheet looks:
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+BS %>%
+  kable(caption = "Balance Sheet") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+#### How the Cash Flow Statement looks:
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+CF %>%
+  kable(caption = "Cash Flow Statements") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+As in previous posts let's clean the data up and put it into a better format which is easier for computations.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+############# Combine and clean the data ###############
+
+ISBSCF <- rbind(IS, BS, CF)
+
+ISBSCF <- ISBSCF %>%
+  t() %>%
+  data.frame() %>%
+  rownames_to_column('rn') %>%
+  separate(rn, into = c("symbol", "year"),
+           sep = -4, convert = TRUE)
+
+
+ISBSCF$symbol <- gsub("(f).*", "", ISBSCF$symbol)
+ISBSCF$symbol <- gsub('.$', '', ISBSCF$symbol)
+ISBSCF$symbol <- gsub('^X', '', ISBSCF$symbol)
+```
+
+#### How the full data looks:
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+ISBSCF %>%
+  kable(caption = "Income Statment - Balance Sheet - Cash Flow") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+Now that we have the full data, we can perform any number of calculations across different financial statements. Now the companies are in the "rows" and the "columns" consist of thefinancial entires.
+
+Some calculations are necessary for computing the `NFO`.
+
+#### Compute the Cash Flow Cycle
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+########## Create the Cash Cycle Calculations #############
+
+#Set CashCycle data.frame up
+CashCycle <- data.frame(matrix("", nrow = nrow(ISBSCF)))
+CashCycle[,1] <- NULL
+CashCycle$Ticker <- ISBSCF$symbol
+CashCycle$Date <- ISBSCF$year
+
+#CashCycle excluding accured expense Calculations
+CashCycle$CollectionPeriod <- (ISBSCF$Net.Receivables / ISBSCF$Total.Revenue) * 365
+CashCycle$DaysofInventory <- (ISBSCF$Inventory / ISBSCF$Cost.of.Revenue) * 365
+CashCycle$DaysofPayable <- (ISBSCF$Accounts.Payable / ISBSCF$Cost.of.Revenue) * 365
+CashCycle$CashCollectionCycle <- CashCycle$CollectionPeriod + CashCycle$DaysofInventory - CashCycle$DaysofPayable
+#CashCycle including accured expense Calculations
+CashCycle$DaysofPayableAccExp <- ((ISBSCF$Accounts.Payable + ISBSCF$Total.Current.Liabilities) / ISBSCF$Cost.of.Revenue) * 365
+CashCycle$CashCollectionCycleAccExp <- CashCycle$CollectionPeriod + CashCycle$DaysofInventory - CashCycle$DaysofPayableAccExp
+
+CashCycle <- CashCycle[Reduce(`&`, lapply(CashCycle, function(x) !is.nan(x)  & !is.infinite(x))),]
+```
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+CashCycle %>%
+  kable(caption = "Cash Flow Cycle") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+
+Where all the results are in days. So Unilever `2018`, `CollectionPeriod` was `34.5` days, up from their `2017`, `CollectionPeriod` and up annually since `2015`. Wheras `Ford` has been decreasing their `CollectionPeriod` over the sample period. 
+
+Let us continue with some DuPont analysis...
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+########## Create the DuPont Calculations #############
+
+#DuPont Analysis
+#Set CashCycle data.frame up
+DuPontAnalysis <- data.frame(matrix("", nrow = nrow(ISBSCF)))
+DuPontAnalysis[,1] <- NULL
+DuPontAnalysis$Ticker <- ISBSCF$symbol
+DuPontAnalysis$Date <- ISBSCF$year
+#DuPont Analysis Calculations
+DuPontAnalysis$ROE <- ISBSCF$Net.Income / ISBSCF$Total.stockholders..equity
+DuPontAnalysis$ROS <- ISBSCF$Net.Income / ISBSCF$Total.Revenue
+DuPontAnalysis$Turnover <- ISBSCF$Total.Revenue / ISBSCF$Total.Assets
+DuPontAnalysis$Leverage <- ISBSCF$Total.Assets / ISBSCF$Total.stockholders..equity
+
+DuPontAnalysis <- DuPontAnalysis[Reduce(`&`, lapply(DuPontAnalysis, function(x) !is.nan(x)  & !is.infinite(x))),]
+```
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+DuPontAnalysis %>%
+  kable(caption = "DuPont Calculations") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+#### Compute the Need for Funds and Working Capital calculations
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+########## Create the NFO & WC Calculations #############
+
+#NFO-WC Analysis
+NFO_WCAnalysis <- data.frame(matrix("", nrow = nrow(ISBSCF)))
+NFO_WCAnalysis[,1] <- NULL
+NFO_WCAnalysis$Ticker <- ISBSCF$symbol
+NFO_WCAnalysis$Date <- ISBSCF$year
+#NFO_WC Analysis Calculations
+NFO_WCAnalysis$REC <- ISBSCF$Net.Receivables
+NFO_WCAnalysis$INV <- ISBSCF$Inventory
+NFO_WCAnalysis$OtherCurrentAssetsNotCash <- ISBSCF$Other.Current.Assets
+NFO_WCAnalysis$Payables <- ISBSCF$Accounts.Payable
+NFO_WCAnalysis$SpontaneousFunsIncDeftaxes <- ISBSCF$Total.Current.Liabilities + ISBSCF$Other.Current.Liabilities + ISBSCF$Income.Tax.Expense
+
+####
+NFO_WCAnalysis$NFO <- NFO_WCAnalysis$REC + NFO_WCAnalysis$INV + NFO_WCAnalysis$OtherCurrentAssetsNotCash - NFO_WCAnalysis$Payables - NFO_WCAnalysis$SpontaneousFunsIncDeftaxes
+NFO_WCAnalysis$LTD <- ISBSCF$Long.Term.Debt
+NFO_WCAnalysis$EQ <- ISBSCF$Total.stockholders..equity
+NFO_WCAnalysis$OtherLongTermLiabilities <- ISBSCF$Minority.Interest + ISBSCF$Other.Liabilities
+NFO_WCAnalysis$FA <- ISBSCF$Total.Assets - ISBSCF$Total.Current.Assets
+
+###
+NFO_WCAnalysis$WC <- NFO_WCAnalysis$LTD + NFO_WCAnalysis$EQ + NFO_WCAnalysis$OtherLongTermLiabilities - NFO_WCAnalysis$FA
+NFO_WCAnalysis$CreditPlusCashMinus <- NFO_WCAnalysis$NFO - NFO_WCAnalysis$WC
+
+NFO_WCAnalysis <- NFO_WCAnalysis[Reduce(`&`, lapply(NFO_WCAnalysis, function(x) !is.nan(x)  & !is.infinite(x))),]
+
+```
+
+Lets inspect the result.
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+NFO_WCAnalysis %>%
+  kable(caption = "NFO WC Analysis") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+According to [Miguel Antón](https://www.iese.edu/faculty-research/faculty/miguel-anton/):
+
+*If NFO > WC - ask for credit
+
+*If NFO < WC - surplus cash
+
+Lets plot the results and analyse them further:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+########## Plot the NFO & WC #############
+
+symbol <- NULL
+symbols <- unique(NFO_WCAnalysis$Ticker)
+
+# Create the plots for NFO and WC for all symbols
+plotList <- list()
+for(symbol in symbols){
+  plotList[[symbol]] <- ggplot(subset(NFO_WCAnalysis, Ticker %in% symbol)) +
+    geom_line(aes(Date, NFO, group = Ticker, colour = "Blue")) +
+    geom_line(aes(Date, WC, group = Ticker, colour = "Red")) +
+    labs(title=paste0("NFO and WC plot ", symbol), x="Year", y="NFO / WC") +
+    scale_color_manual(labels = c("NFO", "WC"), values = c("Blue", "Red")) +
+    guides(color=guide_legend("Legend")) +
+    theme_tq() +
+    theme(legend.position = "right")
+}
+
+
+# Change the symbols to view the NFO WC plots
+plotList[1]
+plotList[2]
+plotList[3]
+plotList[4]
+
+# Print the results to a PDF document
+#pdf("PlotsNFO_WC.pdf", onefile = TRUE, paper = "USr") #Uncomment this if you want to save to .pdf
+#plotList
+#dev.off()
+```
+
+#### Plotting the collection period, inventory days and days of payabales
+
+We can also analyse the collection periods for each firm. `mm` here simply means `melted` data - which is a way of `reshaping` a data frame in R, check out the `melt` functon from the `reshape2` package in R if interested. 
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+########## Collection Period, Days of Inventory and Days of Payable #############
+# Create the plots for Collection Period, Days of Inventory and Days of Payable
+
+mm <- melt(CashCycle, id = c('Ticker', 'Date'))
+mm <- mm[mm$variable == "CollectionPeriod" | mm$variable == "DaysofInventory" | mm$variable == "DaysofPayable",]
+mm$value <- with(mm, ifelse(variable == "DaysofPayable", -value, value))
+```
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+mm %>%
+  head() %>%
+  kable(caption = "Collection Period - Days of Inventory - Days of Payable") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+#### Plot the results
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+########## Plot the Collection Period, Days of Inventory and Days of Payable #############
+
+symbol <- NULL
+symbols <- unique(mm$Ticker)
+
+plotListBar <- list()
+for(symbol in symbols){
+  plotListBar[[symbol]] <- ggplot(mm[mm$Ticker == symbol,], aes(Date, value,  fill = variable)) + facet_wrap(~ Ticker) +
+    geom_bar(stat="identity", position = "dodge") +
+    theme_tq() +
+    theme(legend.position = "right")
+}
+
+plotListBar[1]
+plotListBar[2]
+plotListBar[3]
+plotListBar[4]
+
+# Print the results to a PDF document
+#pdf("Plots_OperationalRatios.pdf", onefile = TRUE, paper = "USr") #Uncomment if you want to save to .pdf
+#plotListBar
+#dev.off()
+```
+
+#### Any errors are my own!
+
+You can save the results using:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+# library(openxlsx)
+# if(devtools::find_rtools()) Sys.setenv(R_ZIPCMD= file.path(devtools:::get_rtools_path(),"zip"))
+# write.xlsx(CashCycle, 'CashCycle.xlsx')
+# write.xlsx(DuPontAnalysis, 'DuPontAnalysis.xlsx')
+# write.xlsx(NFO_WCAnalysis, 'NFO_WCAnalysis.xlsx')
+# write.xlsx(df, 'FinancialsAllCompanies.xlsx')
+```

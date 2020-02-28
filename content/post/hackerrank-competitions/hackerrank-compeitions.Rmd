@@ -1,0 +1,283 @@
+---
+title: Series of Hackerrank Competitions
+author: ~
+date: '2019-09-24'
+subtitle: 'A few simple Hackerrank competitons consisting of time series and cross sectional problems'
+summary: 'I show my solutions to a few Hackerrank competitions/problems I had completed and discuss the models and solutions.'
+
+categories: [Hackerrank]
+projects: [Machine Learning]
+tags: [machine learning, hackerrank, time series, xgboost]
+
+output:
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(tidyquant)
+library(dplyr)
+```
+
+#### Problem 1: Battery Life Prediction Problem
+
+The first problem was to predict how long a laptop would last given the number of hours it was charged. The problem is [here](https://www.hackerrank.com/challenges/battery/problem)
+
+We can read in the data directly from the hackerrank website using the following:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+BatteryData <- read.table(file = url("https://s3.amazonaws.com/hr-testcases/399/assets/trainingdata.txt"), strip.white = TRUE, sep = ',', header = FALSE, skip = 0)
+```
+
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+head(BatteryData) %>%
+  kable(caption = "Battery Life Data") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+At first thought I applied a simple time series model to the data and obtained poor predictions. I then took a closer look at the actual data by plotting it and it told a different story.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+BatteryData %>%
+  ggplot(aes(x = V1, y = V2)) + 
+  geom_point() +
+  stat_smooth(method = "lm", col = "red") +
+  geom_vline(xintercept = 4) +
+  theme_tq()
+```
+
+I drew a horizontal line at 4 hours of battery life and plotted a linear regression line - quite clearly it performs badely and I needed to find a different model or better yet set a threshold and predict all observations whose battery had been charging for 4 or more hours to be fully charged.
+
+The model:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+LinearPredictionModel <- function(TestData){
+  TrainData <- read.table(file = url("https://s3.amazonaws.com/hr-testcases/399/assets/trainingdata.txt"), strip.white = TRUE, sep = ',', header = FALSE, skip = 0)
+  
+  TrainData$LessThanFour <- ifelse(TrainData[, 2] < 4, 1, 0)
+  
+  LMData <- TrainData %>%
+    filter(LessThanFour == 1)
+  
+  LinearModel <- lm(V1 ~ V2, data = LMData) 
+  
+  TestData <- data.frame(V2 = TestData)
+  
+  STDOUT <- ifelse(TestData < 4, predict(LinearModel, newdata = TestData), 8)
+  
+  return(cat(STDOUT))
+}
+```
+
+The model basically tells us that if the data is less than 4, then fit a simple linear regression model if it is greater or equal to 4 then just apply an 8 prediction.
+
+We can input some new data as follows:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+TestData <- c(5, 8, 1, 0.2, 3.5, 5.6, 4.32)
+LinearPredictionModel(TestData)
+```
+
+
+#### Problem 2: House Price Prediction Problem using XGBoost
+
+In this problem I want to train an XGBoost (Extreme Gradient Boosting) model to predict what a house is going to be based on some characteristics. There is a house price prediction problem on Hackerrank [here](https://www.hackerrank.com/challenges/predicting-house-prices/problem) but I used the pre-installed base R house prices data.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+library(AER)
+library(car)
+library(dplyr)
+library(xgboost)
+library(tidyquant)
+library(Metrics)
+```
+
+Load in the data and set factors to numeric for easier pre-processing.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+data("HousePrices")
+
+data <- HousePrices %>%
+  mutate_if(is.factor, as.numeric)
+```
+
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+head(data) %>%
+  kable(caption = "House Price Data") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+Split the data between 80% train and 20% testing.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+####################################################################################
+# For this example split between train and test
+smp_size <- floor(nrow(data) * 0.80)
+
+train_ind <- sample(seq_len(nrow(data)), size = smp_size)
+
+train <- data[train_ind, ]
+test <- data[-train_ind, ]
+
+paste("Train Dimensions"); dim(train)
+paste("Test Dimensions"); dim(test)
+```
+
+I create the function to take the training and testing data, train a model and output the predictions. I omit the cross-validation and hype-parameter tuning here but I will write a post detailing how I use a grid search to find the optimal parameters of an XGBoost model soon, (it takes some explaining of the functions I create).
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+####################################################################################
+predictHouseSales <- function(train_data, test_data){
+  x_train <- subset(train_data, select = c(-price))
+  y_train <- subset(train_data, select = c(price)) %>% pull(price)
+  
+  x_test <- subset(test_data, select = c(-price))
+  y_test <- subset(test_data, select = c(price)) %>% pull(price)
+  
+  dtrain <- xgb.DMatrix(data = as.matrix(x_train), label = y_train, missing = "NaN")
+  dtest <- xgb.DMatrix(data = as.matrix(x_test), missing = "NaN")
+  
+  params <- list(
+    "eta" = 0.1, 
+    "max_depth" = 5, 
+    "objective" = "reg:linear",
+    "eval_metric"= "rmse"
+    )
+  
+  xgb.model <- xgb.train(params, dtrain, nrounds = 100)
+  
+  return(predict(xgb.model, newdata = dtest))
+  
+}
+
+myPredictions <- predictHouseSales(train, test)
+```
+
+We can inspect some of the predictions and compare them to the actual preditions below:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+####################################################################################
+myPredictions %>%
+  data.frame() %>%
+  setNames(c("myPreds")) %>%
+  mutate(myPreds = round(myPreds, 0)) %>%
+  bind_cols(test) %>%
+  select(myPreds, price) %>%
+  sample_n(5) %>%
+  kable(caption = "Compare predictions to the observed") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+Compute the Root Mean Square Error:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+####################################################################################
+myPredictions %>%
+  data.frame() %>%
+  setNames(c("myPreds")) %>%
+  mutate(myPreds = round(myPreds, 0)) %>%
+  bind_cols(test) %>%
+  select(myPreds, price) %>%
+  summarise(rmse(myPreds, price)) %>%
+  kable(caption = "Compute the RMSE") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+We can also plot the predictions against the observed using `ggplot2`:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+####################################################################################
+myPredictions %>%
+  data.frame() %>%
+  setNames(c("myPreds")) %>%
+  mutate(myPreds = round(myPreds, 0)) %>%
+  bind_cols(test) %>%
+  select(myPreds, price) %>%
+  ggplot(aes(x = price, y = myPreds)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  ggtitle("My predictions vs Actual Price") +
+  theme_tq()
+```
+
+The model does *okay* without any feature engineering or parameter optimisation using a grid search method.
+
+#### Problem 3: Imputing missing values - cross section
+
+For simplicity I load in the `iris` dataset and I create some random missing values since the `iris` data doesn't have any.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+# Load in the data
+library(missForest)
+data(iris)
+data <- iris
+```
+
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+head(data) %>%
+  kable(caption = "Iris dataset") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+I generate some random missing data, i.e. 20% of the data is missing at random (MaR) or Missing Completely at Random (MCaR). This is an important issue for economists since much of the data we collect contains missing values, due to surveys not being filled correctly, or simply data not being very well colelcted. The below model allows us to *impute* the missing values using machine learning, avoiding simple averaging or simply removing the values all together.
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+# create random missing variables
+data <- prodNA(iris, noNA = 0.2)
+print("Create some random missing data")
+head(data) %>%
+  kable(caption = "Iris dataset with random missing values") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+Okay now we can train a series of simple missing value imputation models on the data.
+
+# Model 1: randomForest Imputation:
+
+I won't discuss the models here but random forests uses a collection of decision trees and averages the results across all trees, which results it some powerful predictions.
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+# Model 1: RandomForest Imputation:
+# Create a function to impute the random missing values
+ImputeData <- function(InputData){
+  ImputedData <- missForest(InputData, mtry = floor(sqrt(ncol(InputData))), ntree = 100)
+  ImputedData <- ImputedData$ximp
+  return(ImputedData)
+}
+
+ImputedData <- ImputeData(data)
+```
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+head(ImputedData) %>%
+  kable(caption = "Iris dataset") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+Lets combine all the data together, filter it down to the actual data, the missing data and the predicted data.
+
+### For the Sepal.Length data
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+data %>%
+  bind_cols(ImputedData, iris) %>%
+  select(Sepal.Length, Sepal.Length1, Sepal.Length2) %>%
+  setNames(c("Missing_Sepal", "Predicted_Sepal", "Actual_Sepal")) %>%
+  subset(is.na(Missing_Sepal), select = c("Predicted_Sepal", "Actual_Sepal")) %>%
+  sample_n(10) %>%
+  mutate(Predicted_Sepal = round(Predicted_Sepal, 1)) %>%
+  kable(caption = "Compare Sepal Observations") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+Which isn't bad! given that we only had 436 observations to train on and only 110 observations to test on. Using `randomForest` models to impute the data is better than averaging the data on some datasets, of course we have errors the actual observations are somewhat close to the predicted data. I only analyse the `Sepal.Length` data but substitute the values to find the missing values for the `Sepal.Width`, `Petal.Length`, `Petal.Width` and `Species` values since `missorest` imputes categorical variables as well.

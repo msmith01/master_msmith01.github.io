@@ -18,6 +18,13 @@ output:
 <script src="/rmarkdown-libs/kePrint/kePrint.js"></script>
 
 
+<pre class="r"><code>library(knitr)
+library(kableExtra)
+library(tidyquant)
+library(directlabels)
+library(tibble)
+library(tidyr)
+library(quantmod)</code></pre>
 <p>I developed a model to collect financial information from Yahoo Finance, I wanted to use this model to understand a little better how to analyse comanies, what ratios are important and to see how companies performances differ from each other.</p>
 <pre class="r"><code># A function to collect fundamental data from Yahoo finance (Income Statement, Balance Sheet and Cash Flow statements, just skip past this part.)
 
@@ -107,7 +114,7 @@ CF &lt;- as.data.frame(CF)</code></pre>
 <h4>How the Income Statement looks:</h4>
 <table class="table table-striped table-hover table-condensed table-responsive" style="font-size: 12px; margin-left: auto; margin-right: auto;">
 <caption style="font-size: initial !important;">
-<span id="tab:unnamed-chunk-3">Table 1: </span>Income Statement
+<span id="tab:unnamed-chunk-4">Table 1: </span>Income Statement
 </caption>
 <thead>
 <tr>
@@ -1678,7 +1685,7 @@ Net Income Applicable To Common Shares
 <h4>How the Balance Sheet looks:</h4>
 <table class="table table-striped table-hover table-condensed table-responsive" style="font-size: 12px; margin-left: auto; margin-right: auto;">
 <caption style="font-size: initial !important;">
-<span id="tab:unnamed-chunk-4">Table 2: </span>Balance Sheet
+<span id="tab:unnamed-chunk-5">Table 2: </span>Balance Sheet
 </caption>
 <thead>
 <tr>
@@ -3964,7 +3971,7 @@ Net Tangible Assets
 <h4>How the Cash Flow Statement looks:</h4>
 <table class="table table-striped table-hover table-condensed table-responsive" style="font-size: 12px; margin-left: auto; margin-right: auto;">
 <caption style="font-size: initial !important;">
-<span id="tab:unnamed-chunk-5">Table 3: </span>Cash Flow Statements
+<span id="tab:unnamed-chunk-6">Table 3: </span>Cash Flow Statements
 </caption>
 <thead>
 <tr>
@@ -5292,7 +5299,7 @@ ISBSCF$symbol &lt;- gsub(&#39;^X&#39;, &#39;&#39;, ISBSCF$symbol)</code></pre>
 <h4>How all the fundamentals look now:</h4>
 <table class="table table-striped table-hover table-condensed table-responsive" style="font-size: 12px; margin-left: auto; margin-right: auto;">
 <caption style="font-size: initial !important;">
-<span id="tab:unnamed-chunk-7">Table 4: </span>Income Statement - Balance Sheet - Cash Flow
+<span id="tab:unnamed-chunk-8">Table 4: </span>Income Statement - Balance Sheet - Cash Flow
 </caption>
 <thead>
 <tr>
@@ -10270,7 +10277,7 @@ colnames(stats) &lt;- gsub(&quot;/&quot;, &quot;.&quot;, colnames(stats))</code>
 <h4>How the company statistics look:</h4>
 <table class="table table-striped table-hover table-condensed table-responsive" style="font-size: 12px; margin-left: auto; margin-right: auto;">
 <caption style="font-size: initial !important;">
-<span id="tab:unnamed-chunk-9">Table 5: </span>Company Statistics
+<span id="tab:unnamed-chunk-10">Table 5: </span>Company Statistics
 </caption>
 <thead>
 <tr>
@@ -10306,25 +10313,25 @@ Price.Book
 AAPL
 </td>
 <td style="text-align:left;">
-2019-09-23 16:00:01
+2019-09-25 16:00:01
 </td>
 <td style="text-align:left;">
 Apple Inc. 
 </td>
 <td style="text-align:right;">
-18442498
+19675563
 </td>
 <td style="text-align:right;">
-18.571793
+18.767937
 </td>
 <td style="text-align:right;">
-0.0135948
+0.0135979
 </td>
 <td style="text-align:right;">
 4519179776
 </td>
 <td style="text-align:right;">
-10.275299
+10.383821
 </td>
 </tr>
 <tr>
@@ -10332,16 +10339,16 @@ Apple Inc. 
 AMZN
 </td>
 <td style="text-align:left;">
-2019-09-23 16:00:01
+2019-09-25 16:00:01
 </td>
 <td style="text-align:left;">
 Amazon.com, Inc. 
 </td>
 <td style="text-align:right;">
-2653560
+3217392
 </td>
 <td style="text-align:right;">
-74.066540
+73.362510
 </td>
 <td style="text-align:right;">
 NA
@@ -10350,7 +10357,7 @@ NA
 494656000
 </td>
 <td style="text-align:right;">
-16.621202
+16.463211
 </td>
 </tr>
 <tr>
@@ -10358,16 +10365,16 @@ NA
 GOOG
 </td>
 <td style="text-align:left;">
-2019-09-23 16:00:01
+2019-09-25 16:00:01
 </td>
 <td style="text-align:left;">
 Alphabet Inc. 
 </td>
 <td style="text-align:right;">
-1074687
+1345323
 </td>
 <td style="text-align:right;">
-24.912285
+25.164429
 </td>
 <td style="text-align:right;">
 NA
@@ -10376,7 +10383,7 @@ NA
 347344992
 </td>
 <td style="text-align:right;">
-4.456366
+4.501470
 </td>
 </tr>
 <tr>
@@ -10384,25 +10391,25 @@ NA
 MSFT
 </td>
 <td style="text-align:left;">
-2019-09-23 16:00:02
+2019-09-25 16:00:01
 </td>
 <td style="text-align:left;">
 Microsoft Corporation
 </td>
 <td style="text-align:right;">
-17333123
+20835063
 </td>
 <td style="text-align:right;">
-27.498024
+27.541502
 </td>
 <td style="text-align:right;">
-0.0131956
+0.0133935
 </td>
 <td style="text-align:right;">
 7635409920
 </td>
 <td style="text-align:right;">
-10.392113
+10.408545
 </td>
 </tr>
 <tr>
@@ -10410,16 +10417,16 @@ Microsoft Corporation
 BIDU
 </td>
 <td style="text-align:left;">
-2019-09-23 16:00:01
+2019-09-25 16:00:01
 </td>
 <td style="text-align:left;">
 Baidu, Inc. 
 </td>
 <td style="text-align:right;">
-3504571
+3734534
 </td>
 <td style="text-align:right;">
-7.976469
+8.009974
 </td>
 <td style="text-align:right;">
 NA
@@ -10428,7 +10435,7 @@ NA
 348540992
 </td>
 <td style="text-align:right;">
-1.470052
+1.476227
 </td>
 </tr>
 </tbody>
@@ -10449,7 +10456,7 @@ stocks &lt;- symbols %&gt;%
 <h4>How the stock price data looks:</h4>
 <table class="table table-striped table-hover table-condensed table-responsive" style="font-size: 12px; margin-left: auto; margin-right: auto;">
 <caption style="font-size: initial !important;">
-<span id="tab:unnamed-chunk-11">Table 6: </span>Most Recent Stock Prices
+<span id="tab:unnamed-chunk-12">Table 6: </span>Most Recent Stock Prices
 </caption>
 <thead>
 <tr>
@@ -10470,10 +10477,10 @@ adjusted
 AAPL
 </td>
 <td style="text-align:left;">
-2019-09-20
+2019-09-25
 </td>
 <td style="text-align:right;">
-217.73
+221.03
 </td>
 </tr>
 <tr>
@@ -10481,10 +10488,10 @@ AAPL
 AMZN
 </td>
 <td style="text-align:left;">
-2019-09-20
+2019-09-25
 </td>
 <td style="text-align:right;">
-1794.16
+1768.33
 </td>
 </tr>
 <tr>
@@ -10492,10 +10499,10 @@ AMZN
 BIDU
 </td>
 <td style="text-align:left;">
-2019-09-20
+2019-09-25
 </td>
 <td style="text-align:right;">
-105.16
+102.80
 </td>
 </tr>
 <tr>
@@ -10503,10 +10510,10 @@ BIDU
 GOOG
 </td>
 <td style="text-align:left;">
-2019-09-20
+2019-09-25
 </td>
 <td style="text-align:right;">
-1229.93
+1246.52
 </td>
 </tr>
 <tr>
@@ -10514,10 +10521,10 @@ GOOG
 MSFT
 </td>
 <td style="text-align:left;">
-2019-09-20
+2019-09-25
 </td>
 <td style="text-align:right;">
-139.44
+139.36
 </td>
 </tr>
 </tbody>
@@ -10534,7 +10541,7 @@ financials &lt;- ISBSCF %&gt;%
 <h4>How all the data looks after joining the fundamentals, stats and latest share price data:</h4>
 <table class="table table-striped table-hover table-condensed table-responsive" style="font-size: 12px; margin-left: auto; margin-right: auto;">
 <caption style="font-size: initial !important;">
-<span id="tab:unnamed-chunk-13">Table 7: </span>All Data
+<span id="tab:unnamed-chunk-14">Table 7: </span>All Data
 </caption>
 <thead>
 <tr>
@@ -11038,16 +11045,16 @@ NA
 18491000
 </td>
 <td style="text-align:left;">
-2019-09-23 16:00:01
+2019-09-25 16:00:01
 </td>
 <td style="text-align:left;">
 Baidu, Inc. 
 </td>
 <td style="text-align:right;">
-3504571
+3734534
 </td>
 <td style="text-align:right;">
-7.976469
+8.009974
 </td>
 <td style="text-align:right;">
 NA
@@ -11056,13 +11063,13 @@ NA
 348540992
 </td>
 <td style="text-align:right;">
-1.470052
+1.476227
 </td>
 <td style="text-align:left;">
-2019-09-20
+2019-09-25
 </td>
 <td style="text-align:right;">
-105.16
+102.80
 </td>
 </tr>
 <tr>
@@ -11301,31 +11308,31 @@ NA
 4283000
 </td>
 <td style="text-align:left;">
-2019-09-23 16:00:02
+2019-09-25 16:00:01
 </td>
 <td style="text-align:left;">
 Microsoft Corporation
 </td>
 <td style="text-align:right;">
-17333123
+20835063
 </td>
 <td style="text-align:right;">
-27.498024
+27.541502
 </td>
 <td style="text-align:right;">
-0.0131956
+0.0133935
 </td>
 <td style="text-align:right;">
 7635409920
 </td>
 <td style="text-align:right;">
-10.392113
+10.408545
 </td>
 <td style="text-align:left;">
-2019-09-20
+2019-09-25
 </td>
 <td style="text-align:right;">
-139.44
+139.36
 </td>
 </tr>
 <tr>
@@ -11564,16 +11571,16 @@ NA
 5986000
 </td>
 <td style="text-align:left;">
-2019-09-23 16:00:01
+2019-09-25 16:00:01
 </td>
 <td style="text-align:left;">
 Alphabet Inc. 
 </td>
 <td style="text-align:right;">
-1074687
+1345323
 </td>
 <td style="text-align:right;">
-24.912285
+25.164429
 </td>
 <td style="text-align:right;">
 NA
@@ -11582,13 +11589,13 @@ NA
 347344992
 </td>
 <td style="text-align:right;">
-4.456366
+4.501470
 </td>
 <td style="text-align:left;">
-2019-09-20
+2019-09-25
 </td>
 <td style="text-align:right;">
-1229.93
+1246.52
 </td>
 </tr>
 <tr>
@@ -11827,16 +11834,16 @@ NA
 10317000
 </td>
 <td style="text-align:left;">
-2019-09-23 16:00:01
+2019-09-25 16:00:01
 </td>
 <td style="text-align:left;">
 Amazon.com, Inc. 
 </td>
 <td style="text-align:right;">
-2653560
+3217392
 </td>
 <td style="text-align:right;">
-74.066540
+73.362510
 </td>
 <td style="text-align:right;">
 NA
@@ -11845,13 +11852,13 @@ NA
 494656000
 </td>
 <td style="text-align:right;">
-16.621202
+16.463211
 </td>
 <td style="text-align:left;">
-2019-09-20
+2019-09-25
 </td>
 <td style="text-align:right;">
-1794.16
+1768.33
 </td>
 </tr>
 <tr>
@@ -12090,31 +12097,31 @@ NA
 5624000
 </td>
 <td style="text-align:left;">
-2019-09-23 16:00:01
+2019-09-25 16:00:01
 </td>
 <td style="text-align:left;">
 Apple Inc. 
 </td>
 <td style="text-align:right;">
-18442498
+19675563
 </td>
 <td style="text-align:right;">
-18.571793
+18.767937
 </td>
 <td style="text-align:right;">
-0.0135948
+0.0135979
 </td>
 <td style="text-align:right;">
 4519179776
 </td>
 <td style="text-align:right;">
-10.275299
+10.383821
 </td>
 <td style="text-align:left;">
-2019-09-20
+2019-09-25
 </td>
 <td style="text-align:right;">
-217.73
+221.03
 </td>
 </tr>
 </tbody>
@@ -12131,7 +12138,7 @@ Apple Inc. 
   kable_styling(bootstrap_options = c(&quot;striped&quot;, &quot;hover&quot;, &quot;condensed&quot;, &quot;responsive&quot;), font_size = 12)</code></pre>
 <table class="kable_wrapper table table-striped table-hover table-condensed table-responsive" style="font-size: 12px; margin-left: auto; margin-right: auto;">
 <caption style="font-size: initial !important;">
-<span id="tab:unnamed-chunk-14">Table 8: </span>Company Variables
+<span id="tab:unnamed-chunk-15">Table 8: </span>Company Variables
 </caption>
 <tbody>
 <tr>
@@ -12920,7 +12927,7 @@ ratios &lt;- financials %&gt;%
          PE_Ratio, EV_EBITDA, NI_REV, Rev_TA, TA_BvE, ROE)</code></pre>
 <table class="table table-striped table-hover table-condensed table-responsive" style="font-size: 12px; margin-left: auto; margin-right: auto;">
 <caption style="font-size: initial !important;">
-<span id="tab:unnamed-chunk-16">Table 9: </span>Financial Ratios
+<span id="tab:unnamed-chunk-17">Table 9: </span>Financial Ratios
 </caption>
 <thead>
 <tr>
@@ -12980,7 +12987,7 @@ ROE
 BIDU
 </td>
 <td style="text-align:left;">
-2019-09-20
+2019-09-25
 </td>
 <td style="text-align:right;">
 175752000
@@ -12992,25 +12999,25 @@ BIDU
 33317000
 </td>
 <td style="text-align:right;">
-36652572
+35830015
 </td>
 <td style="text-align:right;">
-130828572
+130006015
 </td>
 <td style="text-align:right;">
-0.4846795
+0.4816322
 </td>
 <td style="text-align:right;">
-0.2250046
+0.219955
 </td>
 <td style="text-align:right;">
-0.3528459
+0.3449273
 </td>
 <td style="text-align:right;">
-1.329292
+1.29946
 </td>
 <td style="text-align:right;">
-3.926781
+3.902093
 </td>
 <td style="text-align:right;">
 0.2654389
@@ -13030,7 +13037,7 @@ BIDU
 MSFT
 </td>
 <td style="text-align:left;">
-2019-09-20
+2019-09-25
 </td>
 <td style="text-align:right;">
 82718000
@@ -13042,25 +13049,25 @@ MSFT
 44958000
 </td>
 <td style="text-align:right;">
-1064681575
+1064070734
 </td>
 <td style="text-align:right;">
-1228865575
+1228254734
 </td>
 <td style="text-align:right;">
-4.9771390
+4.9746650
 </td>
 <td style="text-align:right;">
-12.8712200
+12.863835
 </td>
 <td style="text-align:right;">
-9.6473503
+9.6418153
 </td>
 <td style="text-align:right;">
-64.249688
+64.21283
 </td>
 <td style="text-align:right;">
-27.333635
+27.320048
 </td>
 <td style="text-align:right;">
 0.1501540
@@ -13080,7 +13087,7 @@ MSFT
 GOOG
 </td>
 <td style="text-align:left;">
-2019-09-20
+2019-09-25
 </td>
 <td style="text-align:right;">
 177628000
@@ -13092,25 +13099,25 @@ GOOG
 40421000
 </td>
 <td style="text-align:right;">
-427210045
+432972486
 </td>
 <td style="text-align:right;">
-465673045
+471435486
 </td>
 <td style="text-align:right;">
-2.1549858
+2.1816526
 </td>
 <td style="text-align:right;">
-2.4050828
+2.437524
 </td>
 <td style="text-align:right;">
-3.1224468
+3.1645640
 </td>
 <td style="text-align:right;">
-13.899338
+14.08682
 </td>
 <td style="text-align:right;">
-11.520572
+11.663133
 </td>
 <td style="text-align:right;">
 0.2246472
@@ -13130,7 +13137,7 @@ GOOG
 AMZN
 </td>
 <td style="text-align:left;">
-2019-09-20
+2019-09-25
 </td>
 <td style="text-align:right;">
 43549000
@@ -13142,25 +13149,25 @@ AMZN
 27762000
 </td>
 <td style="text-align:right;">
-887492026
+874715023
 </td>
 <td style="text-align:right;">
-974841026
+962064023
 </td>
 <td style="text-align:right;">
-7.4473332
+7.3497229
 </td>
 <td style="text-align:right;">
-20.3791597
+20.085766
 </td>
 <td style="text-align:right;">
-3.8108268
+3.7559633
 </td>
 <td style="text-align:right;">
-88.106029
+86.83759
 </td>
 <td style="text-align:right;">
-35.114222
+34.653988
 </td>
 <td style="text-align:right;">
 0.0432527
@@ -13180,7 +13187,7 @@ AMZN
 AAPL
 </td>
 <td style="text-align:left;">
-2019-09-20
+2019-09-25
 </td>
 <td style="text-align:right;">
 107147000
@@ -13192,25 +13199,25 @@ AAPL
 81801000
 </td>
 <td style="text-align:right;">
-983960995
+998874301
 </td>
 <td style="text-align:right;">
-1216625995
+1231539301
 </td>
 <td style="text-align:right;">
-3.5802914
+3.6241784
 </td>
 <td style="text-align:right;">
-9.1832809
+9.322466
 </td>
 <td style="text-align:right;">
-3.7047422
+3.7608927
 </td>
 <td style="text-align:right;">
-16.528548
+16.77906
 </td>
 <td style="text-align:right;">
-14.872997
+15.055309
 </td>
 <td style="text-align:right;">
 0.2241420
@@ -13235,7 +13242,7 @@ AAPL
   kable_styling(bootstrap_options = c(&quot;striped&quot;, &quot;hover&quot;, &quot;condensed&quot;, &quot;responsive&quot;), font_size = 12)</code></pre>
 <table class="table table-striped table-hover table-condensed table-responsive" style="font-size: 12px; margin-left: auto; margin-right: auto;">
 <caption style="font-size: initial !important;">
-<span id="tab:unnamed-chunk-17">Table 10: </span>Price Earnings, Price Book ratios
+<span id="tab:unnamed-chunk-18">Table 10: </span>Price Earnings, Price Book ratios
 </caption>
 <thead>
 <tr>
@@ -13268,16 +13275,16 @@ AAPL
 Apple Inc. 
 </td>
 <td style="text-align:right;">
-18.571793
+18.767937
 </td>
 <td style="text-align:right;">
-16.528548
+16.77906
 </td>
 <td style="text-align:right;">
-10.275299
+10.383821
 </td>
 <td style="text-align:right;">
-9.1832809
+9.322466
 </td>
 </tr>
 <tr>
@@ -13288,16 +13295,16 @@ AMZN
 Amazon.com, Inc. 
 </td>
 <td style="text-align:right;">
-74.066540
+73.362510
 </td>
 <td style="text-align:right;">
-88.106029
+86.83759
 </td>
 <td style="text-align:right;">
-16.621202
+16.463211
 </td>
 <td style="text-align:right;">
-20.3791597
+20.085766
 </td>
 </tr>
 <tr>
@@ -13308,16 +13315,16 @@ GOOG
 Alphabet Inc. 
 </td>
 <td style="text-align:right;">
-24.912285
+25.164429
 </td>
 <td style="text-align:right;">
-13.899338
+14.08682
 </td>
 <td style="text-align:right;">
-4.456366
+4.501470
 </td>
 <td style="text-align:right;">
-2.4050828
+2.437524
 </td>
 </tr>
 <tr>
@@ -13328,16 +13335,16 @@ MSFT
 Microsoft Corporation
 </td>
 <td style="text-align:right;">
-27.498024
+27.541502
 </td>
 <td style="text-align:right;">
-64.249688
+64.21283
 </td>
 <td style="text-align:right;">
-10.392113
+10.408545
 </td>
 <td style="text-align:right;">
-12.8712200
+12.863835
 </td>
 </tr>
 <tr>
@@ -13348,16 +13355,16 @@ BIDU
 Baidu, Inc. 
 </td>
 <td style="text-align:right;">
-7.976469
+8.009974
 </td>
 <td style="text-align:right;">
-1.329292
+1.29946
 </td>
 <td style="text-align:right;">
-1.470052
+1.476227
 </td>
 <td style="text-align:right;">
-0.2250046
+0.219955
 </td>
 </tr>
 </tbody>
@@ -13381,7 +13388,7 @@ Baidu, Inc. 
   facet_wrap(~ symbol, ncol = 2, scales = &quot;free&quot;) +
   theme_tq() +
   ggtitle(&quot;Stock Prices since December 2018&quot;)</code></pre>
-<p><img src="/post/financial-ratios-in-r/2019-09-22-fundamental-financial-ratios-in-r_files/figure-html/unnamed-chunk-18-1.png" width="672" /></p>
+<p><img src="/post/financial-ratios-in-r/2019-09-22-fundamental-financial-ratios-in-r_files/figure-html/unnamed-chunk-19-1.png" width="672" /></p>
 </div>
 <div id="also-using-fundamental-data" class="section level4">
 <h4>Also using fundamental data:</h4>
@@ -13394,6 +13401,6 @@ Baidu, Inc. 
   ylab(&quot;Total Assets &amp; Total Liabilities&quot;) +
   theme_tq() +
   theme(legend.position = &quot;none&quot;)</code></pre>
-<p><img src="/post/financial-ratios-in-r/2019-09-22-fundamental-financial-ratios-in-r_files/figure-html/unnamed-chunk-19-1.png" width="672" /></p>
+<p><img src="/post/financial-ratios-in-r/2019-09-22-fundamental-financial-ratios-in-r_files/figure-html/unnamed-chunk-20-1.png" width="672" /></p>
 <p>Any errors are my own, if you find any please let me know!</p>
 </div>

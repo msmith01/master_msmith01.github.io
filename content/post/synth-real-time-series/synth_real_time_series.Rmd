@@ -1,0 +1,993 @@
+---
+title: Time Series Classification Synthetic vs Real Financial Time Series
+author: ~
+date: '2019-11-03'
+slug: financial-time-series
+subtitle: 'Distinguishing between real financial time series and synthetic time series using XGBoost'
+summary: 'I analyse the difference between two time series and obtain a 67% accuracy (on anonymous data)'
+
+categories: [financial time series]
+projects: [Asset Pricing]
+tags: [asset pricing, xgboost, time series, synthetic data]
+
+output:
+  html_document:
+    code_folding: hide
+---
+
+
+```{r setup, include = FALSE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(kableExtra)
+library(tidyquant)
+library(directlabels)
+library(tibble)
+library(tidyr)
+library(quantmod)
+```
+
+
+**::Note::** This is a long post but I talk about the procedure I took when dealing with a specific time series classification task.
+
+
+I was given a "Data Science" challenge as part of an interview in which I had to distinguish between real financial time series and synthetic time series. I document the results here, the data was anonymous and I have no idea which assets were which or from what time series the assets came from. 
+
+To conclude I obtained an *in-sample-test-accuracy* of 67% and an *out-of-sample-test-accuracy* of 65% (based on what the interviewers told me)
+
+
+All I knew was that I had 12,000 real time series and 12,000 synthetically created time series. (apologies for no data but this was the companies data and not mine, I have uploaded the train and test data sets discussed later [here](https://github.com/msmith01/financial_time_series) where you should be able to run the final XGBoost model). In total there were 24,000 observations. I show the code here for methodological purposes and if you are interested in visualising time series in R and `ggplot2`. The time series features used here are taken from the following papers:
+
+- Large Scale Unusual Time Series Detection by R.Hyndman, E.Wang and N.Laptev
+- Visualising forecasting algorithm performance using time series instance spaces by Y.Kang, Rob.Hyndman and Kate Smith-Miles
+
+You can check out my Jupyter Notebook version [here](https://nbviewer.jupyter.org/github/msmith01/time_series_detection/blob/master/Time_Series_Classification_Financial_Markets.ipynb).
+
+I added a lot of notes to the code throughout the document which might be of additional interest.
+
+### A brief overview of the notebook:
+
+### Part 1 of the notebook:
+
+- Cleans the data and puts it into a better format for analysis. The data I recieved removed all dates, assest names etc. for anonymity.
+- Simple plot of some returns for the Synthetic and Real financial time series.
+- Box-plots of average returns and standard deviations.
+- Computes the Durbin-Watson test statistics for both Synthetic and Real time series and box-plots.
+- Plot the 10 day rolling mean and standard deviations for a random time series for Synthetic and real data.
+- Dickey Fuller test on both the Synthetic and real time series.
+- Jarque-Bera Test For Normality on the Synthetic and real time series.
+- ACF Plots for both the Synthetic and real time series.
+
+### Part 2 of the notebook:
+
+- Creates the time series features.
+- Splits the train.csv into "train" and "validation" data sets.
+- Puts the data into the correct format for XGBoost.
+- Sets up and searches over a parameter space to find the most optimal parameters for this data set (on the train data).
+- Outputs these parameters into a data frame.
+- Train the model using the optimal parameters found from the grid-search.
+- Plot the feature importance scores - i.e. the most "important" variables that the model found when making its predictions.
+- Assign a cut-off on the probability scores (> 0.5 then assign a 1 - real time series, <= 0.5 then assign a 0 for Synthetic).
+- Compute the Confusion Matrix and analyse the 'in-sample' validation results.
+
+### Part 3 of the notebook:
+
+- Create the "test.csv" features just as before and save as "TSfeatures_test.csv".
+- Load in the "TSfeatures_train_val.csv" and "TSfeatures_test.csv" which were created from "train.csv" and "test.csv".
+- Set up and run the XGBoost model using the optimal parameters found from the cross-validation grid search in "Part 2".
+- Plot the predicted probability density plot as before in "Part 2".
+- Set the cut-off threshold as the mean prediction score (0.465) which is close to the (0.500) score from "Part 2".
+- Save the results as "submission.csv".
+
+Lets get started...
+
+I often remove all other data in my environment before hand and turn scientific notation off which is what the first 2 lines does. The `shhh` command is useful for Jupyter Notebooks which outputs all the warning messages, adding `shhh` suppresses these warning messaged when loading in the packages. (In R markdown I can set `warning = FALSE` but there is no option on Notebooks. - that I know of - )
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+rm(list = ls())
+options(scipen=999)
+setwd('C:/Users/Matt/Desktop/Data Science Challenge')
+shhh <- suppressPackageStartupMessages
+
+shhh(library(dplyr))
+library(readr)
+library(TSrepr)
+library(ggplot2)
+library(data.table)
+library(cluster)
+library(clusterCrit)
+library(fractalrock)
+library(cowplot)
+library(tidyr)
+library(tidyquant)
+library(lmtest)
+library(aTSA)
+library(tsoutliers)
+library(tsfeatures)
+library(xgboost)
+library(caret)
+library(purrr)
+
+train_val <- read_csv("train.csv")
+test <- read_csv("test.csv")
+```
+
+### NOTE:
+I have 2 data sets, the `train_Val.csv` for training and validation data set and the `test.csv` data set. I do not touch the `test.csv` data set until the very end in *part 3*. All the analysis and optimisation is performed only on the `train_val.csv` data set. The `train_val.csv` contains 12,000 observations and the `test.csv` contains 12,000 observations.
+
+
+### Part 1
+
+The data was given to me in this format:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+head(train_val[, 1:5], 1)
+```
+
+The names of the columns are as follows:
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+colnames(train_val) %>%
+  data.frame() %>%
+  setNames(c("features")) %>%
+  split(as.integer(gl(nrow(.), 20, nrow(.)))) %>%
+  kable(caption = "Time series variables") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+There are 260 "***features***" in the train data along with a **class** variable which is excluded from the testing data. With ~253 trading days in a year the **feature1**, **feature2**, ... **featureN** were daily time series. From my initial observation (and plots) I believed this data to be "**returns**" data. I firstly clean a little the data since time series does not do so well with **feature1**, **feature2**, ... **featureN** as its input. I chose a year at random and renamed the columns with the function `getTradingDates` (there is always an R package for everything...).
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+######################################################################
+################# Clean the data #####################################
+
+# Since the "features" are daily time series, I just choose a random year and rename the feautres into more meaningful names
+# Such as "2010-01-01", "2010-01-02", "2010-01-03" instead of "feature1", "feature2", "feature3" etc.
+# Theres a "trading dates" package in R to get only the dates which are trading dates.
+colnames(train_val) <- getTradingDates('2010-01-01', obs = 260)
+colnames(train_val)[ncol(train_val)] <- "class"
+colnames(test) <- getTradingDates('2010-01-01', obs = 260)
+test$dataset <- "test"
+train_val$dataset <- "train"
+```
+
+Here (if I were to do things differently) I would keep to `tidy` data principles and use `test %>% add_column(dataset = "test)` and `train %>% add_colum(dataset = "train")` instead of `test$dataset <- "test` and `train_val$dataset <- "train"`. But that doesn't matter much.
+
+### How the training data looks after cleaning:
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+train_val[, 1:5] %>%
+  head() %>%
+  kable(caption = "How the training set looks now (cleaned)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+
+### How the testing data looks after cleaning:
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+test[, 1:5] %>%
+  head() %>%
+  kable(caption = "How the testing data looks (cleaned)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+**The goal**: Was to classify which financial time series were *real* vs which were *synthetically created* (by some algorithm I have no knowledge of how it generated the synthetic time series)
+
+I re-arranged the data using the `melt` function in R, however I suggest anybody reading this to use the `pivol_longer` function from the `tidyverse` packages. The `pivot_longer` package was released a few weeks after writing the code for this problem.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+######################################################################
+################# Rearrange the data #################################
+
+# I melt the data for easier analysis, now the data is in a long format.
+
+# "Class" corresponds to whether the asset is Synthetic or Real
+# "Dataset" tells me where the data came from
+# "row_id" - corresponds to a unique ID assigned to each asset both "(Synthetic & Real)"
+# "Variable" is the column names of the original dataset (feature1, feature2, ... , featureN) converted to some date
+# "Value" is the daily returns
+
+df <- train_val %>%
+  mutate(row_id = row_number()) %>%
+  melt(., measure.vars = 1:260) %>%
+  arrange(row_id)
+
+head(df)
+dim(df)
+```
+
+**Note:** I call the training data `df` which in hindsight is probably bad practice and it should be called something related to the `train_Val` named data set. Just keep in mind that `df` refers to the `train_Val` data set. (and does not include the `test.csv` data set data)
+
+As we can see the data has 3,120,000 rows which is 12,000 assets * 260 trading days. Next I plot the returns series using `ggplot`.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+# Plot some returns - I only plot a random sample of 20 assets for each Synthetic vs Real.
+
+ret_plot0 <- df %>%
+  filter(class == 0) %>%
+  group_by(row_id) %>%
+  nest() %>%
+  ungroup() %>% 
+  sample_n(20) %>%
+  unnest() %>% 
+  ggplot(aes(x = variable, y = value)) +
+  geom_line(aes(group = factor(row_id), color = factor(row_id))) +
+  ggtitle("Synthetic Financial Time Series") +
+  theme_classic() +
+  theme(axis.text.x = element_blank(), legend.position = "bottom", legend.title = element_blank())
+
+
+ret_plot1 <- df %>%
+  filter(class == 1) %>%
+  group_by(row_id) %>%
+  nest() %>%
+  ungroup() %>%
+  sample_n(20) %>%
+  unnest() %>%
+  ggplot(aes(x = variable, y = value)) +
+  geom_line(aes(group = factor(row_id), color = factor(row_id))) +
+  ggtitle("Real Financial Time Series") +
+  theme_classic() +
+  theme(axis.text.x = element_blank(), legend.position = "bottom", legend.title = element_blank())
+
+plot_grid(ret_plot0, ret_plot1)
+```
+
+Next I plot boxplots for the Average returns and secondly the standard deviations.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+ave_box <- df %>%
+  group_by(class, row_id) %>%
+  summarise(mean = mean(value)) %>%
+  ggplot(aes(x = factor(class), y = mean, color = factor(class))) +
+  geom_boxplot(show.legend = FALSE) +
+  ggtitle("Syn vs Real Average Returns") +
+  xlab("Class") +
+  ylab("Average Returns") +
+  theme_tq()
+
+sd_box <- df %>%
+  group_by(class, row_id) %>%
+  summarise(sd = sd(value)) %>%
+  ggplot(aes(x = factor(class), y = sd, color = factor(class))) +
+  geom_boxplot(show.legend = FALSE) +
+  ggtitle("Syn vs Real Standard Deviations") +
+  xlab("Class") +
+  ylab("Standard Deviation") +
+  theme_tq()
+
+plot_grid(ave_box, sd_box)
+```
+
+I next calculate the Durbin-Watson statistic. I mostly code using R's *tidy* data principles and therefore use the `tidy` function from the `broom` package to tidy the output of the DW statistic up a little. I do this for both the synthetic time series and real time series. 
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+# I calculate the Durbin-Watson statistic and use the "tidy()" function to summarise the key information from the calculation.
+
+dw_test_class_zero <- df %>%
+  dplyr::filter(class == 0) %>%
+  nest(-row_id) %>%
+  mutate(dw_res = map(data, ~ broom::tidy(lmtest::dwtest(value ~ 1, data = .x)))) %>%
+  unnest(dw_res) %>%
+  mutate(class = "0")
+
+
+
+dw_test_class_zero %>% 
+  head()
+
+# Here I do the exact same thing as above but this time for the class == 1 data.
+
+dw_test_class_one <- df %>%
+  filter(class == 1) %>%
+  nest(-row_id) %>%
+  mutate(dw_res = map(data, ~ broom::tidy(lmtest::dwtest(value ~ 1, data = .x)))) %>%
+  unnest(dw_res) %>%
+  mutate(class = "1")
+
+dw_test_class_one %>%
+  head()
+```
+
+Next I plot the boxplot statistics for each of the Durbin Watson tests.
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+# I bind the rows together and plot a box-plot.
+
+bind_rows(dw_test_class_zero, dw_test_class_one) %>%
+  group_by(class) %>%
+  ggplot(aes(x = factor(class), y = statistic, color = factor(class))) +
+  geom_boxplot(show.legend = FALSE) +
+  ggtitle("Durbin Watson Box Plot Statistics") +
+  xlab("Class") +
+  ylab("Durbin Watson") +
+  theme_tq()
+```
+
+I compute the 10 day rolling mean and standard deviation using the `tq_mutate` function from the `tidyquant` package. `value` corresponds to the returns of the financial time series and is plotted in blue with the 10 day rolling average and standard deviation plotted over the returns. (I use `melt` again here but look into the `pivot_longer` function for a more intuitive application)
+
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+# Rolling mean and standard deviations
+# I only use a random sample of 1 of each class of the grouped observations to save on memory and to make the plot more readable.
+# The rollowing window is 10 days
+# I use the tq_mutate functionality from the "tidyquant" package to keep things in a "tidy" format as per the "tidyverse" 'rules'.
+# In the plot "value" is the returns, "mean_10" is the 10 day rolling mean and "sd_10" is the 10 day rolling standard deviation.
+
+plot0 <- df %>%
+  filter(class == 0) %>%
+  as_tibble() %>%
+  group_by(row_id) %>%
+  nest() %>%
+  ungroup() %>% 
+  sample_n(1) %>%
+  unnest() %>%
+  mutate(variable = as.Date(variable)) %>%
+  tq_mutate(
+    select     = value,
+    mutate_fun = rollapply,
+    width      = 10,
+    align      = "right",
+    FUN        = mean,
+    na.rm      = TRUE,
+    col_rename = "mean_10"
+    ) %>%
+  tq_mutate(
+    select     = value,
+    mutate_fun = rollapply,
+    width      = 10,
+    align      = "right",
+    FUN        = sd,
+    na.rm      = TRUE,
+    col_rename = "sd_10"
+    ) %>%
+  melt(measure.vars = 5:7) %>%
+  setNames(c("row_id", "class", "data set", "date", "variable", "value")) %>%
+  ggplot(aes(x = date)) +
+  geom_line(aes(y = value, colour = variable)) +
+  ggtitle("Synthetic Financial Time Series Rolling Mean and Standard Deviation") +
+  theme_classic() +
+  scale_colour_manual(values = c("#1f77b4", "red", "black")) +
+  theme(axis.text.x = element_blank(), legend.position = "bottom", legend.title = element_blank())
+
+plot1 <- df %>%
+  filter(class == 1) %>%
+  as_tibble() %>%
+  group_by(row_id) %>%
+  nest() %>%
+  ungroup() %>% 
+  sample_n(1) %>%
+  unnest() %>%
+  mutate(variable = as.Date(variable)) %>%
+  tq_mutate(
+    select     = value,
+    mutate_fun = rollapply,
+    width      = 10,
+    align      = "right",
+    FUN        = mean,
+    na.rm      = TRUE,
+    col_rename = "mean_10"
+  ) %>%
+  tq_mutate(
+    select     = value,
+    mutate_fun = rollapply,
+    width      = 10,
+    align      = "right",
+    FUN        = sd,
+    na.rm      = TRUE,
+    col_rename = "sd_10"
+  ) %>%
+  melt(measure.vars = 5:7) %>%
+  setNames(c("row_id", "class", "data set", "date", "variable", "value")) %>%
+  ggplot(aes(x = date)) +
+  geom_line(aes(y = value, colour = variable)) +
+  ggtitle("Real Financial Time Series Rolling Mean and Standard Deviation") +
+  theme_classic() +
+  scale_colour_manual(values = c("#1f77b4", "red", "black")) +
+  theme(axis.text.x = element_blank(), legend.position = "bottom", legend.title = element_blank())  
+
+plot_grid(plot0, plot1)
+``` 
+
+An important note in the code here is that I randomly sample by *group*, that is, I do not take a random sample from all observations across all groups. Instead I `group_by` each time series (each of the 6,000 observations after I filtered by the `class == 0`, likewise when I filter by the `class == 1`), I then `nest()` the data to collapse the daily time series for each asset into a `list`. From here I will have 6,000 observations, each of which has their time series nested inside a list. Thus, I can sample 1 of the 6,000 observations and then `unnest()` and obtain a full time series set of one of the random assets selected, - instead of sampling randomly over all assets time series data (which would be completely wrong).
+
+For example the following commented out code `group_by()` the ID variable and `nest()` the data, takes a random `sample_n()` of the grouped data and then `unnest()` the data to its original form, this time with a random sample of the IDs.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+#  group_by(row_id) %>%
+#  nest() %>%
+#  ungroup() %>% 
+#  sample_n(1) %>%
+#  unnest() %>%
+```
+
+Next I compute the Dickey Fuller test on both series for a single random observation, hence the `sample_n(1)` argument (it's too computationally expensive to compute it on all 12,000 observations).
+
+For the synthetically created series.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+# Dickey Fuller test on the 0 class
+# I only randomly sample 1 of the assets for the 0 class to save on output space
+
+df %>%
+  filter(class == 0) %>%
+  group_by(row_id) %>%
+  nest() %>%
+  ungroup() %>% 
+  sample_n(1) %>%
+  unnest() %>%
+  nest(-row_id) %>%
+  mutate(adf_res = map(data, ~ adf.test(.x$value))) %>%
+  unnest(adf_res)
+```
+
+The same but on the real financial series. 
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+# Dickey Fuller test on the 1 class
+# I only randomly sample 1 of the assets for the 1 class to save on output space
+
+df %>%
+  filter(class == 1) %>%
+  group_by(row_id) %>%
+  nest() %>%
+  ungroup() %>% 
+  sample_n(1) %>%
+  unnest() %>%
+  nest(-row_id) %>%
+  mutate(adf_res = map(data, ~ adf.test(.x$value))) %>%
+  unnest(adf_res)
+```
+
+Next the Jarque-Bera tests for normality. Firstly on the synthetically created series.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+# For both classes I take a random sample of 1 observation from each class (Synthetic and Real financial series)
+
+jb_zero <- df %>%
+  filter(class == 0) %>%
+  group_by(row_id) %>%
+  nest() %>%
+  ungroup() %>% 
+  sample_n(1) %>%
+  unnest() %>%
+  nest(-row_id) %>%
+  mutate(JarqueBeraTest = map(data, ~ JarqueBera.test(.x$value)))
+
+print("Jarque-Bera Test on the 0 - Synthetic class")
+jb_zero$JarqueBeraTest
+```
+
+Also on the real financial series.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+jb_one <- df %>%
+  filter(class == 0) %>%
+  group_by(row_id) %>%
+  nest() %>%
+  ungroup() %>% 
+  sample_n(1) %>%
+  unnest() %>%
+  nest(-row_id) %>%
+  mutate(JarqueBeraTest = map(data, ~ JarqueBera.test(.x$value)))
+
+print("Jarque-Bera Test on the 1 - Real class")
+jb_one$JarqueBeraTest
+```
+
+### Autocorrelation plots:
+
+I plot the Autocorrelation Function for a "random" sample of observations time series. I selected 4 observations and filtered the data by them.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+######################################################################
+################# ACF plots ##########################################
+
+# I only use 4 observations for these plots, 2 from the "synthetic" class and 2 from the "real" class.
+
+df %>%
+  filter(row_id == 6422 | row_id == 8967 | row_id == 6080 | row_id == 	5734) %>%
+  mutate(date = as.Date(variable)) %>%
+  ggplot(aes(x = date)) +
+  geom_line(aes(y = value), color = "red", alpha = 0.4) +
+  geom_hline(yintercept = 0) +
+  facet_wrap(~ row_id + class) +
+  theme_tq()
+
+acf_data <- df %>%
+  dplyr::filter(row_id == 6422 | row_id == 8967 | row_id == 6080 | row_id == 	5734) %>%
+  mutate(date = as.Date(variable))
+
+df_acf <- acf_data %>%
+  group_by(row_id) %>% 
+  summarise(list_acf = list(acf(value, plot=FALSE))) %>%
+  mutate(acf_vals = purrr::map(list_acf, ~as.numeric(.x$acf))) %>% 
+  select(-list_acf) %>% 
+  unnest() %>% 
+  group_by(row_id) %>% 
+  mutate(lag = row_number() - 1)
+
+df_ci <- acf_data %>% 
+  group_by(row_id) %>% 
+  summarise(ci = qnorm((1 + 0.95)/2)/sqrt(n()))
+
+ggplot(df_acf, aes(x = lag, y = acf_vals)) +
+  geom_bar(stat="identity", width=.05) +
+  geom_hline(yintercept = 0) +
+  geom_hline(data = df_ci, aes(yintercept = -ci), color="blue", linetype="dotted") +
+  geom_hline(data = df_ci, aes(yintercept = ci), color="blue", linetype="dotted") +
+  labs(x="Lag", y="ACF") +
+  facet_wrap(~ row_id) +
+  theme_tq()
+```
+
+Thats enough data analysis I could probably fit the PACF plots also along with a few more exploratory data analysis but I move on to generating the financial time series features using the `tsfeatures` package.
+
+What I do in the below code is to take a random sample of 5 groups (Using the whole data set takes too long to calculate the time series features) and then apply all the functions in the `tsfeatures` package to each of the time series assets data which is does by mapping over each assets data and computing the time series features.
+
+This section takes some time to process and compute (especially on the whole sample) and I already saved the results as a csv which I will just work from and load in the pre-computed time series features.
+
+```{r, include = TRUE, eval = FALSE, message = FALSE, warning = FALSE}
+################# Generate Time Series Features ######################
+
+# I create some time series features from the package "tsfeatures". There are 40+ functions in the "tsfeatures" package
+# which can generate approximately 106 time series features.
+# Due to memory issues I am only able to create a few of the features, therefore I randomly sample 10 features from the
+# "tsfeatures" package. We could also add in technical indicators from the "PerformanceAnalytics" or "TTR" packages (I omit these
+# here, however creating 'functions2 <- ls("package:TTR")' and adding it to the 'summarise' command will work.)
+
+functions <- ls("package:tsfeatures")[1:42]
+# functions <- sample(functions, 20)
+
+Stats <- df %>%
+  group_by(row_id, class) %>%
+  nest() %>%
+  ungroup() %>%
+  sample_n(5) %>%
+  unnest() %>%
+  nest(-row_id, -class) %>%
+  group_by(row_id, class) %T>%
+  {options(warn = -1)} %>%
+  summarise(Statistics = map(data, ~ data.frame(
+    bind_cols(
+      tsfeatures(.x$value, functions))))) %>%
+  unnest(Statistics)
+
+```
+
+```{r, include = TRUE, eval = TRUE, message = FALSE, warning = FALSE}
+# I saved to whole dataset as "Stats" next I split it between training and test.
+Stats <- read.csv("C:/Users/Matt/Desktop/Data Science Challenge/TSfeatures_train_val.csv")
+```
+
+**Note:** Again, bad practice by me. I just called the `df` data `Stats` which consists of only the time series features. This still only refers to the `train_val.csv` data and *not* the `test.csv` data.
+
+The training data looks like: (after computing the time series features). Now each asset has been collapsed from ~260 days down to 1 signal time series feature observation.
+
+Recall the goal here was to classify synthetic time series vs real time series and not what the next days price is going to be. For each asset I have a signal observation and based on this I can train a classifying algorithm to distinguish between real vs synthetic time series.
+
+### How the training data looks:
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+Stats %>%
+  head() %>%
+  kable(caption = "tsfeatures package features") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+
+dim(Stats)
+```
+The dimensions of the data as still 12,000 with 109 features (created from the tsfeatures package). That is we have 6,000 synthetic and 6,000 real financial time series (12,000 * ~260 =  3,120,000 but we applied tsfeatures to collapse the ~260 down to 1 single observation for each asset)
+
+I collapsed this problem down from a time series prediction problem to a pure classification problem. I split the data between training and validation set next... I also split the data into `X_train`, `Y_train`... etc.
+
+I split the `df/Stats` data set into a train set of 75% of the observations and an *in-sample* test data set of 25% of the observations.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+######################################################################
+################# Train and XGBoost model on the TS Features #########
+
+#Stats <- Stats %>%
+#  select_if(~sum(!is.na(.)) > 0)
+
+# Split the training set up between train and a small validation set
+smp_size <- floor(0.75 * nrow(Stats))
+#set.seed(123)
+train_ind <- sample(seq_len(nrow(Stats)), size = smp_size)
+
+train <- Stats[train_ind, ]
+val <- Stats[-train_ind, ]
+
+# We have 106 time series features for the model to learn from.
+
+x_train <- train %>%
+  ungroup() %>%
+  select(-class, -row_id, -X) %>%
+  as.matrix()
+
+x_val <- val %>%
+  ungroup() %>%
+  select(-class, -row_id, -X) %>%
+  as.matrix()
+
+y_train <- train %>%
+  ungroup() %>%
+  pull(class)
+
+y_val <- val %>%
+  ungroup() %>%
+  pull(class)
+```
+
+### How the training X (input variables) data looks:
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+x_train %>%
+  head() %>%
+  kable(caption = "How the X_train data look") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+### How the training Y (predictor variable) data looks:
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+y_train %>%
+  head() %>%
+  data.frame() %>% 
+  kable(caption = "Y_train") %>%
+  kable_styling(bootstrap_options = c("hover", "condensed", "responsive"), font_size = 12)
+```
+
+I set the data up for an XGBoost model:
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+# XGBoost expects a 'special' type of matrix
+dtrain <- xgb.DMatrix(data = as.matrix(x_train), label = y_train, missing = "NaN")
+dval <- xgb.DMatrix(data = as.matrix(x_val), label = y_val, missing = "NaN")
+```
+
+I create a grid search in order search over a parameter space to locate the optimal parameters for the data set. It needs a little more work but it's a pretty good starting point. I can just add code to the `expand.grid` function. That is, say I want to increase the depth of the tree I can add to `max_depth = c(5, 8, 14)` more parameters such as `max_depth = c(5, 8, 14, 1, 2, 3, 4, 6, 7)`. **Note** Adding parameters to the grid search increases computational time exponentially. Every parameter you add a value to, the model has to search all possible combinations associated with that parameter. That is, adding an `eta = c(0.1)` and `max_depth = c(5)` would give me the optimal parameter for one iteration/loop through the training model, i.e. an `eta = c(0.1)` mapped onto a `max_depth = c(5)`. Adding an additional value to the `eta = c(0.1, 0.3)` and `max_depth = c(5)` would map `eta = 0.1` onto `max_depth = 5` and `eta = 0.3` on to `max_depth = 5`. If I add another value such that `eta = c(0.1, 0.3, 0.4)` then all 3 of these values will be mapped to `max_depth = c(5)`. Adding values to the `max_depth = c(5)` parameter would add an extra layer of complexity to the grid search. This added into the fact that there are many parameters to optimize in an XGBoost model can drastically increase computational complexity. Thus, understanding the statistics behind the models in Machine Learning is important when trying to avoid getting stuck in a local minimum (which any greedy algorithm using gradient descent optimisation can do: [greedy algorithm](https://en.wikipedia.org/wiki/Greedy_algorithm)).
+
+```{r, include = TRUE, eval = FALSE, message = FALSE, warning = FALSE}
+######################################################################
+################# XGBoost Grid Search to locate Optimal Parameters ###
+
+##############################################################################################################################
+# NOTE: This section was taken from the first chapter of my PhD where I needed to search over a parameter space to locate the
+# most optimal parameters - I have just adapted it for this problem of Time Series Classification.
+# Its simple enough to add parameters and different values - I just optimise a few important parameters from domain knowledge
+# of the XGBoost model for this task, i.e depth and eta are quite important in gradient boosting.
+
+# 1) I create a "grid" with different parameter values or combinations of parameter values
+# 2) I apply cross validation over the parameter space to fine the most optimal values for the XGBoost model.
+# 3) I print the model parameters which give the best train / (in-sample test) results in a data table.
+##############################################################################################################################
+
+# Grid Search Parameters:
+# 1)
+searchGridSubCol <- expand.grid(subsample = c(1), #Range (0,1], default = 1, set to 0.5 will prevent overfitting
+                                colsample_bytree = c(1), #Range (0,1], default = 1
+                                max_depth = c(5, 8, 14), #Range (0, inf], default = 6
+                                min_child = c(1), #Range (0, inf], default = 1
+                                eta = c(0.1, 0.05, 0.3), #Range (0,1], default = 0.3
+                                gamma = c(0), #Range (0, inf], default = 0
+                                lambda = c(1), #Default = 1, L2 regularisation on weights, higher the more conservative the model
+                                alpha = c(0), #Default = 0, L1 regularisation on weights, higher the more conservative the model
+                                max_delta_step = c(0), #Range (0, inf], default = 0 (Helpful for logisitc regression when class is extremely imbalanced, set to value 1-10 may help control the update)
+                                colsample_bylevel = c(1) #Range (0,1], default = 1
+                                )
+
+ntrees = 200
+nfold <- 10                             # I use nfold = 10 which is probably too many folds, 5 should be sufficient.
+watchlist <- list(train = dtrain, test = dval)
+
+# 2)
+system.time(
+  AUCHyperparameters <- apply(searchGridSubCol, 1, function(parameterList){
+    #Extract Parameters to test
+    currentSubsampleRate <- parameterList[["sub_sample"]]
+    currentColsampleRate <- parameterList[["colsample_bytree"]]
+    currentDepth <- parameterList[["max_depth"]]
+    currentEta <- parameterList[["eta"]]
+    currentMinChild <- parameterList[["min_child"]]
+    gamma <- parameterList[["gamma"]]
+    lambda <- parameterList[["lambda"]]
+    alpha <- parameterList[["alpha"]]
+    max_delta_step <- parameterList[["max_delta_step"]]
+    colsample_bylevel <- parameterList[["colsample_bylevel"]]
+    xgboostModelCV <- xgb.cv(data =  dtrain,
+                             nrounds = ntrees,
+                             nfold = nfold,
+                             showsd = TRUE,
+                             metrics = c("auc", "logloss", "error"),
+                             verbose = TRUE,
+                             "eval_metric" = c("auc", "logloss", "error"),
+                             "objective" = "binary:logistic", #Outputs a probability "binary:logitraw" - outputs score before logistic transformation
+                             "max.depth" = currentDepth,
+                             "eta" = currentEta,
+                             "gamma" = gamma,
+                             "lambda" = lambda,
+                             "alpha" = alpha,
+                             "subsample" = currentSubsampleRate,
+                             "colsample_bytree" = currentColsampleRate,
+                             print_every_n = 50, # print ever 50 trees to reduce the outputs printed.
+                             "min_child_weight" = currentMinChild,
+                             booster = "gbtree", #booster = "dart"  #using dart can help improve accuracy.
+                             early_stopping_rounds = 10,
+                             watchlist = watchlist,
+                             seed = 1234)
+    xvalidationScores <<- as.data.frame(xgboostModelCV$evaluation_log)
+    train_auc_mean <- tail(xvalidationScores$train_auc_mean, 1)
+    test_auc_mean <- tail(xvalidationScores$test_auc_mean, 1)
+    train_logloss_mean <- tail(xvalidationScores$train_logloss_mean, 1)
+    test_logloss_mean <- tail(xvalidationScores$test_logloss_mean, 1)
+    train_error_mean <- tail(xvalidationScores$train_error_mean, 1)
+    test_error_mean <- tail(xvalidationScores$test_error_mean, 1)
+    output <- return(c(train_auc_mean, test_auc_mean, train_logloss_mean, test_logloss_mean, train_error_mean, test_error_mean, xvalidationScores, currentSubsampleRate, currentColsampleRate, currentDepth, currentEta, gamma, lambda, alpha, max_delta_step, colsample_bylevel, currentMinChild))
+    hypemeans <- which.max(AUCHyperparameters[[1]]$test_auc_mean)
+    output2 <- return(hypemeans)
+    }))
+```
+
+The output of the grid search can be set into a nice data frame using the following code. However I did not save this output to file and therefore cannot read it in. You can view the output on the original Jupyter Notebook `In [49]` [here](https://nbviewer.jupyter.org/github/msmith01/time_series_detection/blob/master/Time_Series_Classification_Financial_Markets.ipynb)
+
+```{r, include = TRUE, eval = FALSE, message = FALSE, warning = FALSE}
+# 3)
+output <- as.data.frame(t(sapply(AUCHyperparameters, '[', c(1:6, 20:29))))
+varnames <- c("TrainAUC", "TestAUC", "TrainLogloss", "TestLogloss", "TrainError", "TestError", "SubSampRate", "ColSampRate", "Depth", "eta", "gamma", "lambda", "alpha", "max_delta_step", "col_sample_bylevel", "currentMinChild")
+colnames(output) <- varnames
+data.table(output)
+```
+
+
+According to the results at the time the optimal parameters were:
+
+- ntrees = 95,
+- eta = 0.1,
+- max_depth = 5,
+
+With the other parameters left to default settings for simplicity.
+
+# Plug the optimal parameters into the model.
+
+```{r, include = TRUE, eval = TRUE, message = FALSE, warning = FALSE}
+#################################################################################
+################# XGBoost Optimal Parameters from Cross Validation ##############
+
+# This is the final training model where I use the most optimal parameters found over the grid space and plug them in here.
+
+watchlist <- list("train" = dtrain)
+
+params <- list("eta" = 0.1, "max_depth" = 5, "colsample_bytree" = 1, "min_child_weight" = 1, "subsample"= 1,
+               "objective"="binary:logistic", "gamma" = 1, "lambda" = 1, "alpha" = 0, "max_delta_step" = 0,
+               "colsample_bylevel" = 1, "eval_metric"= "auc",
+               "set.seed" = 176)
+
+nround <- 95
+```
+
+Now that I have the optimal parameters from the cross validation grid search I can train the final XGBoost model on the whole `train_val.csv` data set. (Whereas before the optimal parameters were obtained from different *folds* in the model. More info on k-fold cross validation [here](https://machinelearningmastery.com/k-fold-cross-validation/))
+
+```{r, include = TRUE, eval = TRUE, message = FALSE, warning = FALSE}
+# Train the XGBoost model
+
+xgb.model <- xgb.train(params, dtrain, nround, watchlist)
+# Note: Plot AUC on for the in-sample train / validation scores -  this was a note for me at the time of writing this R file - I never did get around to plotting the AUC for the in-sample train / validation scores...
+```
+
+What is nice about tree based models is that we can obtain *importance* scores from the model and find which variables contributed most to the *gain* in the model. The original paper explains more about the *gain* in *Algorithm 1* and *Algorithm 3* [here](https://arxiv.org/pdf/1603.02754.pdf).
+
+```{r, include = TRUE, eval = TRUE, message = FALSE, warning = FALSE}
+# We can obtain "feature" importance results from the model.
+xgb.imp <- xgb.importance(model = xgb.model)
+xgb.plot.importance(xgb.imp, top_n = 10)
+```
+
+That is, the XGBoost model found that the `spike` was the most important variable. The `spike` comes from the `stl_features` function of the `tsfeatures` package in `R`. It computes various measures of trend and seasonality based on Seasonal and Trend Decomposition (STL) and measures the `spikiness` of a time series based on the variance of the leave-one-out variances of component `e_t`. 
+
+The second variable is interesting also and comes from the `compengine feature set` from the [CompEngine](https://www.comp-engine.org/) database. It groups variables as *autocorrelation*, *prediction*, *stationarity*, *distribution*  and *scaling*.  
+
+The `ARCH.LM` comes from the `arch_stat` function of the `tsfeatures` package and is based on the Lagrange Multiplier for Autoregressive Conditional Heteroscedasticity (ARCH) [Engle 1982](https://www.jstor.org/stable/1912773?origin=crossref&seq=1#page_scan_tab_contents).
+
+These are just a few of the variables the XGBoost model found to be the most *important*. A full overview and more information of the variables used in the model can be found [here](https://cran.r-project.org/web/packages/tsfeatures/vignettes/tsfeatures.html).
+
+### Predictions using  the in-sample test set
+
+Now that I have trained the model using the optimal parameters I want to see if it scores the same or better based on the cross validation phase using the *validation* data. I use the `dval` which is the *validation* data set from the *training split* to test the model. 
+
+```{r, include = TRUE, eval = TRUE, message = FALSE, warning = FALSE}
+# I next make the predictions on the 'in-sample' held out test set, that is, originally I took the 12,000 training samples
+# and split them between 75% training and 25% 'in-sample' testing (9000 training vs 3000 in-sample testing)
+
+# I plot the probabilities from the model - the "dashed" line is the average predicted probability.
+xgb.pred <- predict(xgb.model, dval, type = 'prob')
+
+results <- cbind(y_val, xgb.pred)
+
+results %>%
+ as.tibble() %>%
+ ggplot(aes(x = xgb.pred)) + 
+ geom_density(color = "darkblue", fill = "lightblue") +
+ geom_vline(aes(xintercept = mean(xgb.pred)),
+            color = "blue", linetype = "dashed", size = 1) +
+ geom_histogram(aes(y = ..density..), colour = "black", fill = "white", alpha = 0.1, position = "identity") +
+ ggtitle("Predicted probability density plot") +
+ theme_tq()
+```
+
+
+```{r, include = TRUE, eval = TRUE, message = FALSE, warning = FALSE}
+# The average predicted probability sits around 0.48 / 0.49, for simplicity I will just select 0.50 as the cut off threshold.
+# That is, all observations <= 0.50 are assigned a "0" class or "synthetic" data and all observations >= are assigned a "1" or
+# "real" data.
+# Finally I output the confusion matrix on the 'in-sample' testing data.
+
+results <- results %>%
+  as_tibble() %>%
+  mutate(pred = case_when(
+    xgb.pred > 0.5 ~ 1,
+    xgb.pred <= 0.5 ~ 0
+  ))
+
+confusionMatrix(factor(results$pred), factor(results$y_val))
+```
+
+A balanced accuracy score of 67% isn't so bad considering I threw the kitchen sink at the classification problem and that this is a time series (stock market) classification problem. By kitchen sink I refer to all the time series functions found in the `tsfeatures` package. 
+
+From here I end the training and validation model. I have obtained the optimal values based on the training and validation data sets and now I want to test it on the unknown data the `test.csv` data.
+
+I read in the test data and compute the time series features from the `tsfeatures` package just as I did with the training data.
+
+```{r, include = TRUE, eval = TRUE, message = FALSE, warning = FALSE}
+ test_final <- read.csv("C:/Users/Matt/Desktop/Data Science Challenge/test.csv") %>%
+   mutate(row_id = row_number()) %>%
+   melt(., measure.vars = 1:260) %>%
+   arrange(row_id)
+```
+ 
+### How the test features look - (they look similar to the train data set):
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+test_final %>%
+  head() %>%
+  kable(caption = "Test feature data set") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+ 
+I call this `test_final` and not `test` for no reason what so ever - its the same `test.csv` from the beginning.
+ 
+Next I create the same time series features on the test data set as I do on the training data set. I save this as `TSfeatures_test.csv`.
+```{r, include = TRUE, eval = FALSE, message = FALSE, warning = FALSE}
+functions <- sample(functions, 20)
+
+test_final <- test_final %>%
+  group_by(row_id) %>%
+#  nest() %>%
+#  sample_n(5) %>%
+#  ungroup() %>%
+#  unnest() %>%
+  nest(-row_id) %>%
+  group_by(row_id) %T>%
+  {options(warn = -1)} %>%
+  summarise(Statistics = map(data, ~ data.frame(
+    bind_cols(
+      tsfeatures(.x$value, functions))))) %>%
+  unnest(Statistics)
+
+#print("Generated 106 Time Series features")
+#write.csv(test_final, "TSfeatures_test.csv")
+```
+
+I have computed all the `tsfeatures` for the `train` data set and also for the `test` data set. I saved these two  as `TSfeatures_train_val.csv` and `TSfeatures_test.csv`.
+
+#### Load in the train and test features data sets
+
+I uploaded these files [here](https://github.com/msmith01/financial_time_series)
+
+```{r, include = TRUE, eval = TRUE, message = FALSE, warning = FALSE}
+# I have already created the features for the training dataset so I can just load them right back in as 
+train_final <- read.csv("C:/Users/Matt/Desktop/Data Science Challenge/TSfeatures_train_val.csv")
+test_final <- read.csv("C:/Users/Matt/Desktop/Data Science Challenge/TSfeatures_test.csv")
+```
+
+The final data for the training and test  looks like:
+```{r, include = TRUE, eval = TRUE, message = FALSE, warning = FALSE}
+train_final %>%
+  head() %>%
+  kable(caption = "Final training data set") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+```{r, include = TRUE, eval = TRUE, message = FALSE, warning = FALSE}
+test_final %>%
+  head() %>%
+  kable(caption = "Final testing data set") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+*Finally* we can run the final model on the **held-out-test-set** and obtain our predictions based on the training data and the optimal parameters.
+
+```{r, include = TRUE, eval = TRUE, message = FALSE, warning = FALSE}
+# previously and run the final training model (to make predictions on the out-of-sample test data)
+
+x_train_final <- train_final %>%
+  ungroup() %>%
+  select(-class, -row_id, -X) %>%
+  as.matrix()
+
+x_test_final <- test_final %>%
+  ungroup() %>%
+  select(-row_id, -X) %>%
+  as.matrix()
+
+y_train_final <- train_final %>%
+  ungroup() %>%
+  pull(class)
+
+dtrain_final <- xgb.DMatrix(data = as.matrix(x_train_final), label = y_train_final, missing = "NaN")
+dtest_final <- xgb.DMatrix(data = as.matrix(x_test_final), missing = "NaN")
+
+watchlist <- list("train" = dtrain_final)
+
+params <- list("eta" = 0.1, "max_depth" = 5, "colsample_bytree" = 1, "min_child_weight" = 1, "subsample"= 1,
+               "objective"="binary:logistic", "gamma" = 1, "lambda" = 1, "alpha" = 0, "max_delta_step" = 0,
+               "colsample_bylevel" = 1, "eval_metric"= "auc",
+               "set.seed" = 176)
+
+nround <- 95
+
+xgb.model_final <- xgb.train(params, dtrain_final, nround, watchlist)
+```
+
+I make the final predictions based on the `test.csv` data. The `predict` function in R is great, it can take any model and make predictions, we just need to provide the testing data along with the model. I "ask" for probability scores from the predictions. I plot the density of predicted probabilities also.
+
+```{r, include = TRUE, eval = TRUE, message = FALSE, warning = FALSE}
+# Make the final predictions on the 'test.csv' data and plot the probability density function.
+
+xgb.pred_final <- predict(xgb.model_final, dtest_final, type = 'prob')
+
+xgb.pred_final %>%
+ as_tibble() %>%
+ setNames(c("Prediction")) %>%
+ ggplot(aes(x = Prediction)) + 
+ geom_density(color = "darkblue", fill = "lightblue") +
+ geom_vline(aes(xintercept = mean(Prediction)),
+            color = "blue", linetype = "dashed", size = 1) +
+ geom_histogram(aes(y = ..density..), colour = "black", fill = "white", alpha = 0.1, position = "identity") +
+ ggtitle("(Out of sample) - Predicted probability density plot") +
+ theme_tq()
+```
+
+### Finally! I make the submission file based on the predicted probabilities.
+
+```{r, include = TRUE, eval = TRUE, message = FALSE, warning = FALSE}
+# Convert the probabilities into a binary class of 0 or 1 by a decision threshold of 0.465.
+# Write the predictions to "submission.csv"
+
+xgb.pred_final %>%
+  as_tibble() %>%
+  setNames(c("Prediction")) %>%
+  summarise(mean = mean(Prediction))
+
+xgb.pred_final %>%
+  as_tibble() %>%
+  setNames(c("Prediction")) %>%
+  mutate(pred = case_when(
+    Prediction > 0.465 ~ 1,
+    Prediction <= 0.465 ~ 0
+  )) %>%
+  write.csv("submission.csv")
+```
+
+I make the final remark in the Jupyter Notebook I sent as part of the interview process
+
+Quote::
+*Final footnote: Hopefully the out-of-sample predictions will obtain a 67% accuracy (the predictions in the "submission.csv" file).*
+
+I was told after I sent my scores as part of the interview process how the scores were evaluated (In Spanish):
+
+*Para que sepas cómo es la valoración:
+
+ Obtener entre 0.4-0.6 se considera un resultado aleatorio.
+
+A partir 0.6 el algoritmo clasifica correctamente y más de un 0.7 el algoritmo es genial.
+
+Por debajo de 0.4 son capaces de diferenciar series sintéticas de las reales, pero están intercambiadas.*
+
+I was informed that based on the held out test set I obtained a result of 0.649636 ~0.65% (a little lower than my 0.67% in-sample training set!) but still consistent with the correct methodology I was using (i.e. no leaking test data to the training data) along with the fact that I was just throwing the time series features book/kitchen sink at the problem. Further reading into time series features will strengthen this classification problem and will certainly improve the prediction accuracy! Recall, that my feature selection consisted of applying every feature in the `tsfeatures` package... Using `functions <- ls("package:tsfeatures")[1:42]` and then `mapping` over the data using ```summarise(Statistics = map(data, ~ data.frame( bind_cols(tsfeatures(.x$value, functions))))) %>%```. So there is plenty of improvements to the current model.
+
+
+Conclusion: A combination of time series feature selection and classifciation models can do pretty well on time series classification models such as this one I faced.
+
+Any errors are my own!

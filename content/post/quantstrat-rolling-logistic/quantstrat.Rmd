@@ -1,0 +1,421 @@
+---
+title: "Learning the Quantstrat and Blotter packages"
+author: ~
+date: '2019-09-29'
+subtitle: 'A small tutorial (mostly for myself) to understand the functionality of blotter and quantstrat'
+summary: 'I generate a rolling logistic backtesting function which outputs predicted probabilities, based on these probabilities I construct investment criteria and test whether positive returns can be made (lots of work still to do)'
+
+categories: [Trading]
+projects: [Trading]
+tags: [trading, finance, yahoo finance, quantstrat, technical analysis, backtesting]
+
+output:
+  html_document:
+    code_folding: hide
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
+# Notes ont he blotter lecture: http://www.r-programming.org/papers
+
+# Part 1: https://4310b1a9-a-a8fb2076-s-sites.MSFTlegroups.com/a/r-programming.org/home/files/blotter.pdf?attachauth=ANoY7crukatlvoq19Y0CVuiyYLTfTiYvDomRK-e-SzLdsnSzKM9r9vPFdH76XFTag_VUcyHRTZfkOCu-wBwDAJjsSPemed9EDwvkAwoKhR5USYtQMu3RhmTYOnJ_edLL6LGiar1J9R33SroLUOyTZJ11A4eHZRO2E4I4asDRcpfS9qHSg_8A2sq4savZad0pF1oDoChrmC4jpOAn-amzGe8EoVdlBq4HKw%3D%3D&attredirects=0
+
+# Add nice table on slide 5:
+---
+
+Load packages: 
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+library(knitr)
+library(kableExtra)
+library(dplyr)
+library(ggplot2)
+library(quantstrat)
+```
+**::: Note :::** This post is mostly for my future reference/documentation for learning the `quantstrat` package. An example of a strategy I developed can be found below in which it uses a naive rolling logistic regression model trained on `t` days to predict `t+1` market movement. **::: END Note :::**
+
+I have been playing around with backtesting trading models using the `quantstrat` package for a while but the most difficult thing about it was understanding the syntax of `blotter` and `quantstrat`, it didn't seem very intuitive to me at first and there does not seem to be *much* detailed information online, despite the package being around since 2010. In this post I will give my comments and observations what certain functions do, I will update this post over time.
+
+### Backgorund
+
+The `quantstrat` package is built on the `blotter` package which was developed in 2008. It works best with time series `xts` objects which can be easily collected using the `quantmod` package. The `blotter` package is the accounting package behind the `quantstrat` system, it can support multiple accounts or multiple portfolios and computes the P&L of trading systems.
+
+The main blotter functions are the following:
+
+### Initialisation
+- `initPortf` - which initialises a portfolio
+- `initAcct` - which initialises an account
+
+### Performance
+- `addTxn` - which adds transactions to the portfolio
+- `updatePortf` - which computes the P&L for each symbol in a given period
+- `updateAcct` - which computes the equity from the assets
+- `updateEndEq` - which updates the final equity for an account
+- `getEndEq` - which provides us with the latest value of our account
+- `getPosQty` - which gets a position at a given date.
+- `chart.Posn`- which plots a chart of the position size, and cumulative P&L
+- `PortfReturns`- which calcualtes the portfolio returns
+- `getAccount` - which gets our account info!
+- `getPortfolio` - ""
+- `getTxns` - ""
+- `tradeStats` - which collects trade statistics
+- `perTradeStats` - which calculates per trade statistics
+
+The `blotter` package loads in a number of additional packages as we can see by running the below.
+
+The packages are: `xts` and `zoo` for time series, `FinancialInstrument`, `quantmod`, `TTR`, `PerformanceAnalytics` for finance, where `TTR` stands for Technical Trading Rules.
+
+The blotter package creates a new environment `.blotter`.
+
+### Download Financial Data
+
+Lets first download some data for the S&P500 from 2018 to 2019 in order to gather some data. For the `quantstrat` package its quite usual to find the initiation date, start date, end date set outside the parameters of the model. Therefore I first set these parameters as `initDate`, `startDate` and `endDate`.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+initDate <- '2010-01-01' # this is used for later but is must be before the startDate
+startDate <- '2018-01-01'
+endDate <- '2019-01-01'
+symbols <- c('SPY')
+getSymbols(symbols, from = startDate, to = endDate, src = "yahoo", adjust=TRUE) 
+```
+
+```{r, echo = FALSE, include = TRUE, message = FALSE, warning = FALSE}
+SPY %>%
+  data.frame() %>%
+  head() %>%
+  kable(caption = "SPY stocks") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+```
+
+### Plot the data
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+
+chartSeries(SPY, name = "Daily time series for SPY", type = "candlesticks", theme = chartTheme("white"))
+
+```
+
+Once we have the data and after loading the `blotter` package we must define a few initialisation parameters, namely the `currency()` and `stocks` parameter from the `FinancialInstrument` package.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+currency("USD")
+stock("SPY", currency = "USD", multiplier = 1)
+ls(all = TRUE)
+ls(envir = FinancialInstrument:::.instrument)
+```
+
+We can see that we have the SPY index and the USD currency set. We can convert the data from daily time series to monthly time series using the `to.period` fucntion.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+SPY_monthly <- to.period(SPY, period = "months")
+chartSeries(SPY_monthly, name = "Monthly time series for SPY", type = "candlesticks", theme = chartTheme("white"))
+head(SPY_monthly)
+```
+
+
+### Portfolio parameters
+
+Now that we have our data we should initialise the portfolio with `initPortf`, which will consist of the transactions over the period of analysis.
+
+- `name` - "MyFirstPortfolio" -  the initial name of the portfolio
+- `symbols` - "SPY" - since we are using the SPY500
+- `initPosQty` - 100 - the initial quantity of our position
+- `initDate` - "initDate" - the initial account equity and position (prior to the closing price of our first position)
+- `currency` the currency we are using
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+initDate <- '2010-01-01' # NOTE: We already created this parameter --> which was quoted as "this is used for later but is must be before the startDate"
+initPortf("MyFirstPortfolio", "SPY", initDate = initDate)
+```
+
+### Account parameters
+
+We also need to initialise the account using `initAcct`
+
+- `name` - "MyFirstPortfolio" -  the initial name of the portfolio
+- `portfolios` - the name of our previous portfolio created
+- `initDate` - "initDate" - the initial account equity and position (prior to the closing price of our first position)
+- `initEq` - the initial equity we began with
+- `currency` the currency we are using
+
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+initEq = 1000000
+initAcct("MyFirstPortfolio", portfolios = "MyFirstPortfolio", initDate = initDate, initEQ = initEq)
+first(SPY) # print the first observation in our data
+last(SPY) # print the last observation in our data
+```
+
+# A simple Strategy
+
+A trading strategy can be broken down into the following blocks:
+
+- *Assets* - which are the stocks we want to trade, `SPY`, `MSFT`, `AAPL`, `MSFT` etc.
+- *Indicators* - which are the variables, Open, High, Low, Close, SMA, EMA, RSI, Momentum etc.
+- *Signals* - we can create signals based on the interaction between the *indicators* and the time-series data.
+- *Rules* - Create *buy* and *sell* rules based on the *signals* created.
+- *Orders* - Once a *rule* is activated, push an *order* through.
+- *Analysis* - Analyse the performance of the strategy.
+
+I wanted to test a basic backtesting concept. What happens if I trained a machine learning model each day on the last 100 days of data to predict the next days stock market direction but test this over many periods?. That is to continuously train a machine learning model at every step to predict the next price. One method is to use the `rolling_origin` fucntion from the `rsample` package but I write a more simple function for this.
+
+I load in the parameters of the model and download data for MSFT.
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+library(quantstrat)
+library(PerformanceAnalytics)
+library(e1071)
+
+initDate = "2010-01-01"
+from <- "2018-01-01"
+to <- "2019-09-20"
+
+init_equity <- 1000
+adjustment <- TRUE
+
+.orderqty <- 10                  # The profitability of the strategy depends heavily on this value
+.txnfees <- -10
+.stoploss <- 3e-3 # 0.003 or 0.3%
+
+currency('USD')
+Sys.setenv(TZ="UTC")
+
+symbols <- c('MSFT')
+
+getSymbols(symbols, from = from, to = to, src = "yahoo", adjust = TRUE) 
+```
+
+I created a simple time series pre-processing function to clean up the data, create some features and set the data to `xts`. Ignore the `Scale_Me` function.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+Scale_Me <- function(x){
+  (x - mean(x, na.rm = TRUE)) / sd(x, na.rm = TRUE)
+}
+
+
+TS_preprocess <- function(dat){
+  dat = data.frame(dat)
+  colnames(dat) = c("open", "high", "low", "close", "volume", "adjusted")
+  dat$Y = with(dat, ifelse(close >= open, 1, 0))
+  dat$X1 = SMA(lag(dat$close), n = 10)
+  dat$X2 = RSI(lag(dat$close), nFast = 14, nSlow = 26, nSig = 9, maType = SMA)
+  dat$X3 = momentum(lag(dat$close), n = 12)
+  dat = dat[complete.cases(dat), ]
+  #dat = cbind(dat[, 'Y'], apply(dat[, 8:ncol(dat)], 2, Scale_Me))
+  #colnames(dat)[1] = "Y" 
+  dat = dat[, c("Y", "X1", "X2", "X3")]
+  dat = as.xts(dat)
+  return(dat)
+}
+```
+
+I next set the training period `n_train` = 100 periods and `n_test` = 1 period, or train on `t` days of data and test of `t+1` days of data. This can be quite computationally expensive depending on the machine learning model you input but for a simple binary logistic regression classifier its relatively fast. I create the logistic function which returns the predicted probabilities.
+
+The `RollingBacktest` function, runs the model on `n_train` periods of data and makes a prediction on `n_test`. That is, say we have 1000 days of data, the model will train on the first 100 days and predict on day 101, then retrain on days 2 to 101 days and predict on day 102 and so on, continuing until all 1000 days have passed.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+df <- TS_preprocess(MSFT)
+
+n_train <- 100
+n_test <- 1
+
+LogistFun <- function(frm, dat, trainIndex, testIndex){
+  LogitModel <- glm(frm, data = dat[trainIndex, ])
+  pred <- predict(LogitModel, newdata = dat[testIndex, ], type = 'response')
+  return(pred)
+}
+
+RollingBacktest <- function(dat, ntrain = n_train, ntest = n_test){
+  stopifnot('Y' %in% names(dat))
+  frm_ <- formula(reformulate(paste0("X", seq(2:ncol(dat))), "Y"))
+  
+  stride <- ntrain + ntest
+  startPosn <- seq(1, dim(dat)[1] - stride)
+  
+  train_index_list <- lapply(startPosn, function(i) seq(i, i + ntrain))
+  test_index_list <- lapply(startPosn, function(i) seq((i + ntrain + 1), (i + ntrain + ntest))) 
+  
+  mapply(LogistFun, trainIndex = train_index_list, testIndex = test_index_list, MoreArgs = list(frm = frm_, dat = dat), SIMPLIFY = FALSE
+  )
+}
+
+```
+
+Now that I have the *pre-process function*, the *logistic function* and the *backtest function*, we can run the model through the `TS_postprocess` function, which applies everything.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+TS_postprocess <- function(dat, ntrain){
+  results = tail(dat, -(ntrain + 1))
+  results$probs <- RollingBacktest(dat)
+  results$predictions <- ifelse(results$probs > 0.6, 1, 0)
+  print(paste0("Model Accuracy at the 0.60 prob cut-off ", mean(results$Y == results$predictions)))
+  return(results)
+}
+
+out <- TS_postprocess(df, ntrain = n_train)
+out <- na.omit(cbind(MSFT, out))
+```
+
+The model is not very accurate...
+
+The `na.omit` removes the `NA` values which were created from the `SMA`, `RSI` and `momentum` calculations which are the first few observations of the time series data.
+
+The data looks like:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+out %>%
+  head() %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+We can see that the model outputs predicted probabilities, I simply set the `predictions` column to give a `1` if the models predicted probability is `> 0.5` or a `0` if it is `< 0.5`. The `Y` variable is the observed and the `X1`, `X2` and `X3` variables are the `SMA`, `RSI` and `momentum`.
+
+We can now use the `quantstrat` package to backtest the model and see how the performance went.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+MSFT <- out
+
+stock("MSFT", currency = "USD", multiplier = 1)
+strategy.st <- portfolio.st <- account.st <- "RollingLogitStrategy"
+
+rm.strat(strategy.st)
+rm.strat(portfolio.st)
+rm.strat(account.st)
+
+
+initPortf(name = portfolio.st,
+          symbols = symbols,
+          initDate = initDate,
+          currency = 'USD')
+
+initAcct(name = account.st,
+         portfolios = portfolio.st,
+         initDate = initDate,
+         currency = 'USD',
+         initEq = init_equity)
+
+initOrders(portfolio.st,
+           symbols = symbols,
+           initDate = initDate)
+
+strategy(strategy.st, store = TRUE)
+```
+
+I add the signals to the strategy and give it some rules.
+
+- 1a)
+
+The signal is that the first time the Logistic model produces a probability greater than `0.6` then assign the signal. The `sigThreshold` is a `quantstrat` function, the others are `sigComparison`, `sigCrossover` and `sigFormula`. It calls upon the `threshold` value in the `list` of `arguments`, the column it looks for is the `probs` column which the predicted probabilities are output to,  `gt` means greater than. It basically creates a new column called `logSig` and it would be similar to `ifelse(df$probs > 0.6, 1, 0)` as far as I understand.
+
+- 1b)
+The rule for the strategy is to take `sigcol` which is the `label` we gave our signal in the previous lines which is called `longSig`. If `longSig = 1`, execute a market order going long, buying at the next days open price, the transaction fees were set at the start of the strategy. We call this `rule`, `EnterLONG`.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+nMult_orderqty <- 2
+addPosLimit(portfolio.st, symbol = "MSFT", timestamp = initDate, maxpos = nMult_orderqty * .orderqty)
+
+# Objective: Buy when the probability is gt 0.60, using cross = TRUE
+
+# 1.a)
+add.signal(strategy = strategy.st,
+           name = "sigThreshold",
+           arguments = list(threshold = 0.6,
+                            column = "probs",
+                            relationship = "gt",
+                            cross = TRUE),
+           label = "longSig")
+
+
+
+# 1.b)
+# # Adding the rules, enter at the open price when prob > 0.60 for the first time, taking transaction fees into account
+add.rule(strategy = strategy.st,
+         name = "ruleSignal",
+         arguments = list(sigcol = "longSig",   # check the ifelse predictions statement
+                          sigval = 1,
+                          orderqty = .orderqty,
+                          ordertype = "market",
+                          orderside = "long",
+                          osFUN = osMaxPos,
+                          prefer = "Open",
+                          replace = TRUE,
+                          TxnFees = .txnfees),
+         type = "enter",
+         label = "EnterLONG")
+
+```
+
+From the Logistic model we have added our signal to buy when the probability of the next days price is greater than `0.60`. So far we just keep buying when the probability of the logistic model passes over `0.60` but we have no position to sell when the model predicts something different.
+
+I thought it might be interesting to exit the strategy when the model is undecided or makes a very low predicted probability. I set this threshold to be less than 0.4 based on the probability density plot below. So we are making trades at the tail ends of the distribution, buying when the model is *confident* and selling when it is *unsure*.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+plot(density(out$probs))
+```
+
+Add the signals and rules for exiting the strategy. Using a similar principle as before, I create a `signal` when the probability is less than 0.4 and call it `exitlongSig`.
+
+-  Careful here when setting `type = "exit"` and `orderside = "long"`. Previously had it set to `type = exit` and `orderside = short`! which is completely wrong.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+# 2.a) # create the signal of when we should be looking to exit
+# #exit when prob drops below 0.4 for the first time
+add.signal(strategy = strategy.st,
+           name = "sigThreshold",
+           arguments = list(threshold = 0.4,
+                            column = "probs",
+                            relationship = "lt",
+                            cross = TRUE),
+           label = "exitlongSig")
+
+
+# 2.b) # Add that signal to the rule of exiting
+add.rule(strategy.st,
+         name = "ruleSignal",
+         arguments = list(sigcol = "exitlongSig",
+                          sigval = 1,
+                          orderqty = "all",
+                          ordertype = "market",
+                          orderside = "long",
+                          osFUN = osMaxPos,
+                          prefer = "Open",
+                          replace = TRUE,
+                          TxnFees = .txnfees),
+         type = "exit",
+         label = "ExitLong")
+```
+
+
+We can finally apply the strategy and see how it performs. It doesn't make many transactions due to the backtesting being quite restrictive.
+
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+
+applyStrategy(strategy.st, portfolios = portfolio.st)
+
+updatePortf(portfolio.st)
+updateAcct(account.st)
+updateEndEq(account.st)
+
+chart.Posn(portfolio.st, Symbol = "MSFT")
+           #TA="add_SMA(n = 10, col = 2); add_SMA(n = 30, col = 4)")
+```
+
+Look at the `mktdata` which is where our `signals` and `predictions` are stored.
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+mktdata %>%
+  data.frame() %>%
+  head(10) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+So if we trained a simple logistic model on 100 days of data to give us the next days prediction everyday since June 2018 and only invest if the logistic models prediction is greater than 0.60 and only sell if the logistic models prediction is less than 0.40 then out cumulative P&L would be \$334 with a max drawdown of \$61.
+
+I have probably (almost certainly) gone wrong at somepoint using the `quantstrat` package so the results will probably not generalise well to other assets, especially using a logistic model with 3 regressors! But it was a fun exercise using the `quantstrat` package.
+
+I will revist and modify this markdown file.

@@ -1,0 +1,993 @@
+---
+authors:
+- admin
+date: "2019-11-14"
+layout: post
+title: "Factor Modeling in R"
+subtitle: Portfolio Analysis using R
+summary: I break down some popular and fundamental models from quantitative finance & engineering, construct some factor analysis on a series of Assets and EFTs along with a randomly generated portfolio constructed from scraping tickers from the SPY500 wikipedia page.
+
+
+categories: [Mathematical Finance, Econometrics]
+projects: [Quantitative Finance]
+tags: [time-series, finance, quant finance, yahoo-finance, factor models, asset pricing]
+
+comments: false
+draft: false
+featured: false
+
+bibliography: mybibml.bib
+link-citations: yes
+
+featuredImage: "plot_thumb.jpg"
+---
+
+
+```{r setup, include = FALSE, message = FALSE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(kableExtra)
+options(scipen=999)
+```
+
+
+
+The most popular models for analysing the risk of portfolios are factor models, since stocks have a tendency to move together. The principal component of securities often explains a large share of it's variance. Since we are mostly concerned with multiple assets which form a portfolio we need to account for this. Some questions might be *why do stocks with low Price to Book ratios outperform stocks with higher Price to Book ratios?* Here the "Price" part of the ratio is simply the share price (per share) and the "Book" part of the ratio is the "Shareholders Equity" / "Shares Outstanding" which are items found on a companies Balance Sheet.
+
+Another important reason Factor models are popular are dimensionality. Assume $N$ assets which subsequently has $N$ variances and $N(N-1)/2$ correlations. If we have a factor model with $F$ factors, it has $N$ idiosyncratic variances, $F$ factor variances and $NF$ betas. As long as:
+
+$$2F < N(N-1)/(N+1)$$  
+
+We have fewer parameters with factor models.
+
+
+The Capital Asset Pricing Model @sharpe1964capital is the simplest factor model consisting of a single factor.
+
+$$r_i = a_i + b_if + e_i$$
+
+The mean-variance parameters are:
+
+$$\overline{r}_i = a_{i} + b_{i}\overline{y}$$
+$$\sigma_{i}^2 = b_{i}^2\sigma_{\epsilon_{i}}^2$$
+
+$$\sigma_{ij} = b_{i}b_{j}\sigma_{y}^2$$
+
+The $Cov(r_{i}, y) = Cov(a_{i} + b_{i}y + e_{i}, y) = b_{i}\sigma_{y}^2$ and therefore $b_{i}$ is;
+
+$$b_{i} = \dfrac{Cov(r_{i}, y)}{\sigma_{y}^2}$$
+
+This is alternatively expressed as;
+
+$$b_{i} = Cov(r_{i}, y) / Var(y)$$
+
+Where $b$ is the slope of the regression line which minimises the squared distance of returns and $a$ is the intercept or $alpha$ which are expressed on a line $a + bf$.
+
+I will go through these calculations using *Base R* functions, however first we need some data and for this I like the *tidy* functions which require a few packages.
+
+I download daily price data from Yahoo Finance using `quantmod` or `tidyquant`'s wrapper to the `quantmod` package. The difference here being that `quantmod` collects data and stores it as an `xts` object and `tidyquant` collects the data and stores it as a `tibble`, from here we are able to more easily use functions from the `tidyverse` way of handling data, we convert the data back to an `xts` object using the `tk_xts` function from the `timetk` package.
+
+The firms are Apple, Harley Davidson, Nvidia, Microsoft, AMD, Ford, General Electric, 3M, Intel and Amazon.
+
+```{r Factor Modeling, include = TRUE, message = FALSE, warning = FALSE}
+library(quantmod)
+library(ggplot2)
+library(tidyquant)
+library(tidyr)
+library(dplyr)
+library(timetk)
+library(tibble)
+library(rvest)
+library(corrplot) 
+library(stringr)
+
+start_date <- "2017-01-01"
+end_date <- "2019-01-01"
+
+symbols <- c("AAPL", "HOG", "NVDA", "MSFT", "AMD", "F", "GE", "MMM", "INTL", "AMZN")
+
+portfolio_prices <- tq_get(
+  symbols,
+  from = start_date,
+  to = end_date
+  ) %>%
+  select(symbol, date, adjusted) %>% 
+  pivot_wider(names_from = symbol, values_from = adjusted) %>% 
+  tk_xts(date_var = date)
+```
+
+The data looks like the following, I removed the `Open`, `High`, `Low`, `Close` and `Volume` data and kept just the `Adjusted` prices, where each asset is it's own column, the data has been converted into a time series object or an `xts` object where the `date` is stored as the index (or rownames) and is not visable in the table below.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+portfolio_prices %>%
+  head() %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+I also collect the S&P500 data using the same method:
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+SPY <- tq_get(
+  "^GSPC",
+  from = start_date,
+  to = end_date
+) %>% 
+  select(date, adjusted) %>% 
+  tk_xts(date_var = date)
+```
+
+Which looks similar to the individual asset prices.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+SPY %>%
+  head() %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+We can plot the data using the `chartSeries` function.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+chartSeries(SPY)
+```
+
+I compute the daily log returns for all the assets in the `portfolio_returns` and the `SPY` returns
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+portfolio_returns <- diff(log(portfolio_prices), na.pad = FALSE)
+SPY_returns <- diff(log(SPY), na.pad = FALSE)
+```
+
+The returns data for each asset looks like:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+portfolio_returns %>%
+  head() %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+We can use the `autoplot` to plot `xts` or time series data with `ggplot` functionality, (I only plot the first 3 assets):
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+autoplot(portfolio_returns[,1:3]) +
+  xlab("Date") +
+  ggtitle("Asset Log Returns") +
+  theme_tq()
+  
+```
+
+### Technical R:
+#### From here I will talk a little more *technically* but will keep it as simple as possible.
+
+Next I compute the calculations described at the begining of the post. We first need to define a few things:
+
+*  The number of assets we have in the portfolio, denoted previously as $N$
+*  The number of days we apply our model which is usually denoted as $T$.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+N_portfolio <- ncol(portfolio_prices)
+days <- nrow(portfolio_prices)
+```
+
+#### (a) We can compute $\beta$ as the following:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+beta <- cov(portfolio_returns, SPY_returns) / as.numeric(var(SPY_returns))
+```
+
+Which returns:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+beta %>%
+  head() %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+However, in order to understand it better we can break it down each of the computations:
+
+The $cov$ covariance matrix part of the $beta$ formula looks like:
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+cov(portfolio_returns, SPY_returns) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+We can compute the covariances using base R as follows:
+
+$$Cov(x, y) = \sum_{i=1}^N \dfrac{((x_i - \overline{x}) (y_{i} - \overline{y}))}{(n-1)}$$
+Where $x_{i}$ is our asset and $y_{i}$ is the SPY500. In R we can compute this as:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+x = portfolio_returns[,1] # which takes the first Asset in the portfolio_returns data
+x_bar = colMeans(x)
+
+y = SPY_returns[,1]
+y_bar = colMeans(y)
+
+n = length(x)
+sum(((x - x_bar)*(y - y_bar))) / (n-1)
+```
+
+Which corresponds to the first result, `AAPL` in the `cov(portfolio_returns, SPY_returns)` calculation. We can change the $1$ in `x = portfolio_returns[,1]` to $2$, $3$, $4$ ... $N$ to compute the covariances for each of the assets (`HOG`, `NVDA` and `MSFT`, respectively), or we can wrap the above into a *for loop* to compute for all assets. **Note:** I only changed the $1$ to an $i$ from the above equation in the *for loop*, everything else is constant.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+for(i in 1:ncol(portfolio_returns)){
+  x = portfolio_returns[,i]
+  x_bar = colMeans(x)
+  y = SPY_returns[,1]
+  y_bar = colMeans(y)
+  cov_x_y = sum(((x - x_bar)*(y - y_bar))) / (n-1)
+  print(cov_x_y)
+}
+```
+
+The variance of the SPY returns is.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+as.numeric(var(SPY_returns)) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Which is calculated as:
+
+$$Var = \sum(\dfrac{((y - \overline{y})^2)} {(n-1)})$$
+In base R we can simply calculate it as:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+n = length(SPY_returns)
+y = SPY_returns[,1]
+y_bar = colMeans(y)
+
+sum(((y - y_bar)**2) / (n-1))
+```
+
+Putting all this together, we can compute $beta$. Recall, that $\beta = \dfrac{Cov(r_{i}, y)}{Var(y)}$ where here $r_{i}$ is each of our assets in our portfolio and $y$ is the *market* returns or SPY500 returns.
+
+To compute $beta$ for each of our assets using base R we can wrap the above code into a function:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+myBetaComputation <- function(ASSET){
+  x = ASSET                   # which Asset in the portfolio_returns data we want to compute beta for.
+  x_bar = colMeans(x)
+  
+  y = SPY_returns[,1]
+  y_bar = colMeans(y)
+  
+  cov_x_y <- sum(((x - x_bar)*(y - y_bar))) / (n-1)
+  
+  
+  n = length(SPY_returns)
+  y = SPY_returns[,1]
+  y_bar = colMeans(y)
+  
+  var_y <- sum(((y - y_bar)**2) / (n-1))
+  
+  return(cov_x_y / var_y)
+}
+
+```
+
+We can apply this function to individual assets in our data and then all of them:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+myBetaComputation(portfolio_returns[,1])        # Computes for the first asset
+myBetaComputation(portfolio_returns[,2])        # Computes for the second asset
+sapply(portfolio_returns, myBetaComputation)    # Computes for all assets
+```
+
+The interpretation here is that a value of 1 indicates that the asset moves in perfect correlation with the market, values $>$ 1 indicate that an asset moves more than when the market moves or moves with more volatility when the market moves and values $<$ 1 indicates that an asset moves less than the market.
+
+Typically Tech stocks have a higher market $\beta$ whereas mature non-tech stocks have a lower market $\beta$. That is, AAPL, NVDA, MSFT and AMD all have betas above 1 whereas HOG and Ford (F) have $\beta$'s less than 1.
+
+#### (b) We can compute $\alpha$ as the following:
+
+Now that we have $\beta$ we can estimate $\alpha$ for each of our assets in our portfolio.
+
+Recall, that alpha is defined as;
+
+$$\alpha = \overline{r_{i}} - \beta_{i}*\overline{f}$$ 
+
+Where $\overline{r_{i}}$ is the average returns of our individual assets in our portfolio, $\beta_{i}$ is the beta of each asset over our sample period and $\overline{f}$ is the average returns of SPY. Therefore, we can compute $\alpha$ as;
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+alpha <- colMeans(portfolio_returns) - beta*colMeans(SPY_returns)
+```
+
+The alpha or $\alpha$ for our assests, looks like:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+alpha %>%
+  head() %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+There are other ways to calculate $\beta$ and $\alpha$ but for a single factor model we can use the `CAPM.beta` and `CAPM.alpha` from the `PerformanceAnalytics` package.
+
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+library(PerformanceAnalytics)
+CAPM.beta(Ra = portfolio_returns, Rb = SPY_returns, Rf = 0)
+CAPM.alpha(Ra = portfolio_returns, Rb = SPY_returns, Rf = 0)
+```
+
+Which is much simpler than what we just did. The `Ra` is the asset returns, `Rb` is the market returns and `Rf` is the risk-free rate of return.
+
+Upon investigating the `CAPM.beta` functions from the `PerformanceAnalytics` package I noticed they had functions for `CAPM.beta.bull` and `CAPM.beta.bear`, so I wanted to see how these would look like plotted for each asset.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+rbind(
+  CAPM.beta.bull(Ra = portfolio_returns, Rb = SPY_returns, Rf = 0),
+  CAPM.beta(Ra = portfolio_returns, Rb = SPY_returns, Rf = 0),
+  CAPM.beta.bear(Ra = portfolio_returns, Rb = SPY_returns, Rf = 0)
+) %>% 
+  as_tibble(rownames = NA) %>% 
+  rownames_to_column("betas") %>% 
+  pivot_longer(2:ncol(.)) %>% 
+  ggplot(aes(x = name, y = value, color = betas)) +
+  geom_point(size = 5, shape = 19) +
+  scale_color_brewer(type='seq', palette='Reds') +
+  theme_tq() +
+  ggtitle("Asset Betas:", subtitle = "Bear, Beta, Bull")
+```
+
+Interesting...
+
+### Visualising the covariance matrix of the returns
+
+In order to visualise the the covariance matrix some further formulas are needed.
+
+Ultimately we want to compute the following;
+
+$$\hat{\Sigma} = var(y)\hat{\beta} \hat{\beta}^T + \hat{\psi}$$
+Where;
+$$\hat{\psi} = diag(\hat{\sigma}_{1}^2, ... \hat{\sigma}_{i}^2, ... \hat{\sigma}_{N}^2)$$
+
+We use our $\beta$ and $\alpha$ results from before as well as $N$. I created a function which takes in the $asset$ and computes the residules and Sigma values. What we are calculating here is the following;
+
+`err`
+$$\hat{\epsilon_{i}} = x_{i} - \alpha_{i} - \beta_{i}*y$$ 
+
+Where $i = 1.,..., N$
+
+`Sigma`
+$$\hat{\sigma}_{i}^2 = \dfrac{1} {N-2}\hat{\epsilon}_{i}^N\epsilon_{i}$$
+
+The code in base R for the above equations is:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+beta <- cov(portfolio_returns, SPY_returns) / as.numeric(var(SPY_returns))
+alpha <- colMeans(portfolio_returns) - beta*colMeans(SPY_returns)
+N = length(SPY_returns)
+
+mySigmaFunction <- function(ASSET){
+  err = portfolio_returns[, ASSET] - alpha[ASSET ,] - beta[ASSET ,] * SPY_returns
+  Sigma = (1 / (N - 2)) %*% t(err) %*% err
+  return(Sigma)
+}
+
+mySigmaFunction("AAPL")                               # For Apple
+mySigmaFunction("F")                                  # For Ford
+sapply(colnames(portfolio_returns), mySigmaFunction)  # For all assets in the portfolio
+```
+
+Now that we have the $\sigma$ values. we want to create a matrix with the Sigma values down the digaonal.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+Sigma2 <- sapply(colnames(portfolio_returns), mySigmaFunction)
+diag_Sigma2 <- diag(Sigma2)
+colnames(diag_Sigma2) = colnames(portfolio_returns)
+rownames(diag_Sigma2) = colnames(portfolio_returns)
+```
+
+Which creates our diagonal matrix as follows:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+diag_Sigma2 %>%
+  kable(colnames =NA, rownames =NA) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Now that we have our diagonal matrix $Diag(\psi)$ we can compute the covariance matrix of the returns using: $$\Sigma = var(y)\beta \beta^T + \psi$$ 
+
+Then use the `cov2cor` function from the `stats` package.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+Sigma <- as.numeric(var(SPY_returns)) * beta %*% t(beta) + diag_Sigma2
+corrplot(cov2cor(Sigma), main = "Covariance matrix of Portfolio Assets")
+```
+
+The correlation table looks like:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+cov2cor(Sigma) %>%
+  kable(colnames =NA, rownames =NA) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+
+## ETF analysis and a randomly sampled portfolio
+#### Analysing my randomly selected portfolio and a series of U.S. funds
+
+Since factor modelling is all about risk and portfolio analysis I thought it would be interesting to compare the performance of a number of U.S. Exchnage Traded Funds (ETFs) and a randomly selected portfolio of assets from the SP500.
+
+In order to construct the randomly created portfolio I first scraped the wikipedia page which contains the list of SP500 firms along with their *ticker* symbol, I filter out all *Class A*, *B* and *C* shares since a few firms have multiple asset classes and I don't want to sample two of the same asset. 
+
+Just as before I collect the data and put it into time series format.
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+start_date <- "2016-01-01"
+end_date <- "2017-12-31"
+
+set.seed(4746)
+url <- "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+
+symbols <- url %>%
+  read_html() %>%
+  html_nodes(xpath = '//*[@id="constituents"]') %>% 
+  html_table() %>% 
+  .[[1]] %>% 
+  filter(!str_detect(Security, "Class A|Class B|Class C")) %>%     # Removes firms with Class A shares
+  sample_n(20) %>% 
+  pull(Symbol)
+
+asset_prices <- tq_get(
+  symbols,
+  from = start_date,
+  to = end_date
+) %>%
+  select(symbol, date, adjusted) %>% 
+  pivot_wider(names_from = symbol, values_from = adjusted) %>% 
+  tk_xts(date_var = date)
+```
+
+Which looks like:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+asset_prices %>%
+  head() %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Next, I collect the U.S. ETFs. I scraped a website (which I cannot remember the name) for the symbols of the ETFs.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+myETFs <- c("SPY", "IVV", "VTI", "VOO", "QQQ", "VEA", "IEFA", "AGG", "VWO",
+            "EFA","IEMG","VTV", "IJH", "IWF","BND", "IJR", "IWM", "VUG",
+            "GLD", "IWD", "VIG", "VNQ", "USMV", "LQD", "VO", "VYM", "EEM",
+            "VB", "VCSH", "XLF", "VCIT", "VEU", "XLK", "ITOT", "IVW", "BNDX",
+            "VGT", "DIA", "BSV", "SHV", "IWB", "IWR", "TIP", "SCHF", "MBB", "SDY",
+            "MDY", "SCHX", "IEF", "HYG", "DVY", "XLV", "SHY", "IXUS", "TLT", "IVE",
+            "PFF", "IAU", "VXUS", "RSP", "SCHB", "VV", "GOVT", "EMB", "MUB", "QUAL",
+            "XLY", "VBR", "EWJ", "XLP", "VGK", "SPLV", "MINT", "BIV", "IGSB", "EFAV",
+            "VT", "GDX", "XLU", "IWS", "XLI", "SCHD", "IWP", "ACWI", "VMBS", "XLE", "JNK",
+            "VOE", "FLOT", "IWV", "JPST", "SCZ", "IEI", "IWN", "DGRO", "VBK", "IGIB", "IWO")
+            
+
+etf_prices <- tq_get(
+  myETFs,
+  from = start_date,
+  to = end_date
+) %>% 
+  select(symbol, date, adjusted) %>% 
+  pivot_wider(names_from = symbol, values_from = adjusted) %>% 
+  tk_xts(date_var = date)
+```
+
+The data looks like:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+etf_prices %>%
+  head() %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+I also collect the SPY500.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+SPY_prices <- tq_get(
+  "^GSPC",
+  from = start_date,
+  to = end_date
+) %>% 
+  select(date, adjusted) %>% 
+  tk_xts(date_var = date)
+```
+
+Which looks like:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+SPY_prices %>%
+  head() %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Now, we have a series of 3 data sets, the daily prices of the adjusted close for the randomly selected assets from the SPY500 wikipedia page, the ETFs and the SPY500. Next I calculate the daily returns.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+asset_returns <- diff(log(asset_prices), na.pad = FALSE)
+etf_returns <- diff(log(etf_prices), na.pad = FALSE)
+SPY_returns <- diff(log(SPY_prices), na.pad = FALSE)
+```
+
+The `asset_returns` looks like:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+asset_returns %>%
+  head() %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+However, I want to assume that I own all of these assets in a single portfolio. So I average over the rows and join the data to the ETFs and call it `all_returns`.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+portfolio_returns <- xts(rowMeans(asset_returns), index(asset_returns))
+colnames(portfolio_returns) <- c("myPortfolio")
+all_returns <- cbind(portfolio_returns, etf_returns)
+```
+
+The `all_returns` data looks like the following, where we can now see `myPortfolio` has been joined with the ETF dataset.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+all_returns %>%
+  head() %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Next, I compute (just as before) the $\beta$ and $\alpha$ of the portfolios. This time using just the `CAPM.beta` and `CAPM.alpha` functions in the `PerformanceAnalytics` package.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+library(PerformanceAnalytics)
+betas <- CAPM.beta(Ra = all_returns, Rb = SPY_returns, Rf = 0)
+alphas <- CAPM.alpha(Ra = all_returns, Rb = SPY_returns, Rf = 0)
+
+beta_alphas <- cbind(t(betas), t(alphas))
+colnames(beta_alphas) <- c("beta", "alpha")
+```
+
+I rank the ETF's by their $\alpha$ value. We can see the `GDX` has the highest $\alpha$ and a negative $\beta$ which makes sense since its a Goldminers ETF whihc tracks the Arca Gold Miners Index (GDMNTR) which tracks the performance of companies involved in the gold mining industry. As far as I know there are very few Gold mining companies listed in the SPY500. However, this is a nice way to present and rank ETFs by their $\alpha$ values and see their corresponding $\beta$ values.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+beta_alphas %>% 
+  as_tibble(rownames = NA) %>% 
+  rownames_to_column("ETFs") %>% 
+  arrange(desc(alpha)) %>% 
+  head(10) %>% # I only take the top 10 observations since there are many ETF's in the data
+  pivot_longer(cols = c("beta", "alpha")) %>% 
+  ggplot(aes(x = reorder(ETFs, if_else(name == "alpha", value, -Inf), FUN = max), y = value)) +
+  geom_bar(color = "black", fill = "darkred", stat = "identity") +
+  scale_color_brewer(type='seq', palette='Reds') + 
+  facet_wrap(~name, scales = "free") +
+  theme_tq() +
+  coord_flip() +
+  ggtitle("Highest ranked  alpha stocks", subtitle = "With corresponding beta values") +
+  ylab("Alpha / Beta value") +
+  xlab("ETF")
+
+```
+
+We can also rank the $alpha$ and $beta$ values by taking their ratio of $\dfrac{\alpha}{\beta}$ and plot the results.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+beta_alphas %>% 
+  as_tibble(rownames = NA) %>% 
+  rownames_to_column("ETFs") %>% 
+  mutate(alpha_divided_beta = alpha/beta) %>% 
+  arrange(desc(alpha_divided_beta )) %>% 
+  head(10) %>% 
+  ggplot(aes(x = ETFs, y = alpha_divided_beta )) +
+  geom_bar(color = "black", fill = "darkred", stat = "identity") +
+  scale_color_brewer(type='seq', palette='Reds') + 
+  theme_tq() +
+  coord_flip() +
+  ggtitle("Best Performers: Alpha over Beta ranked ETFs") +
+  ylab("Alpha / Beta value") +
+  xlab("ETF")
+```
+
+Changing a few lines of code and we can plot and see the worst performers with negative $\alpha$ to $\beta$ ratios.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+beta_alphas %>% 
+  as_tibble(rownames = NA) %>% 
+  rownames_to_column("ETFs") %>% 
+  mutate(alpha_divided_beta = alpha/beta) %>% 
+  arrange(alpha_divided_beta) %>% 
+  head(10) %>% 
+  ggplot(aes(x = ETFs, y = alpha_divided_beta )) +
+  geom_bar(color = "black", fill = "darkblue", stat = "identity") +
+  scale_color_brewer(type='seq', palette='Reds') + 
+  theme_tq() +
+  coord_flip() +
+  ggtitle("Worst Performers: Alpha over Beta ranked ETFs") +
+  ylab("Alpha / Beta value") +
+  xlab("ETF")
+```
+
+We can take our ETF $\beta$ and $\alpha$ values before and compute $\sigma$.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+beta <- cov(all_returns, SPY_returns) / as.numeric(var(SPY_returns))
+alpha <- colMeans(all_returns) - beta*colMeans(SPY_returns)
+N = length(SPY_returns)
+
+mySigmaFunction <- function(ASSET){
+  err = all_returns[, ASSET] - alpha[ASSET ,] - beta[ASSET ,] * SPY_returns
+  Sigma = (1 / (N - 2)) %*% t(err) %*% err
+  return(Sigma)
+}
+
+Sigma2 <- sapply(colnames(all_returns), mySigmaFunction)
+diag_Sigma2 <- diag(Sigma2)
+colnames(diag_Sigma2) = colnames(all_returns)
+rownames(diag_Sigma2) = colnames(all_returns)
+
+Sigma <- as.numeric(var(SPY_returns)) * beta %*% t(beta) + diag_Sigma2
+
+```
+
+Finally, I take a random sample of the ETF's (since there are too many to analyse) and plot the correlations between the ETF's.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+set.seed(1234)
+Sigma_subsample <- sample(colnames(Sigma), size = 10)
+Sigma_sampled <- Sigma[ncol = Sigma_subsample, nrow = Sigma_subsample, drop = FALSE]
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(cov2cor(Sigma_sampled), method = "color", col = col(200),
+         main = "Covariance matrix of ETFs",
+         type = "upper", order = "hclust", number.cex = .7,
+         addCoef.col = "black",
+         tl.col = "black", tl.srt = 90,
+         diag = FALSE)
+```
+
+## Sharpe Ratio, CAPM and Fama-French Factor Analysis
+
+Using simple plots still doesn't give us enough information about an ETF, Portfolio or Asset. The *Sharpe* ratio @sharpe1966mutual is a better measure. The *Sharpe* ratio is a reward-to-variability ratio which allows us to compare the performance of a portfolio compared to a risk-free asset, after adjusting for it's risk. It takes the differenece between the portfolio's return and the risk-free return, this is then divided by the standard deviation (which measures the portfolios volatility).
+
+
+The *Sharpe* ratio tells us what the additional unit of return we can expect per unit of risk increase. The *Sharpe* ratio is defined as:
+
+$$S = \dfrac{\overline{d}}{\sigma_{d}}$$
+
+Where $$\widetilde{d} = \widetilde{R}_{F} - \widetilde{R}_{B}$$
+
+The single asset model with just the market factor looks like:
+
+$$ x_t = \alpha + \beta y_{t} + \epsilon_{t}$$
+
+Taking the expected value of $x$ and $y$ at time $t$ we have:
+
+$$E[x_{t}] = \alpha + \beta E[y_{t}]$$
+With variance:
+
+$$var[x_{t}] = \beta^2var[y_t] + \sigma^2$$
+
+Thus, the *Sharpe* ratio becomes:
+
+$$\dfrac{E[x_{t}]}{\sqrt{var[x_{t}]}}$$
+
+Recall that $\sigma = \sqrt{var[x_t]}$, we just plug in the values for $E[x_{t}]$ and $var[x_t]$ defined previously and the equation becomes:
+
+$$\dfrac{\alpha + \beta E[y_{t}]}{\sqrt{\beta^2 var[y_t] + \sigma^2}}$$
+Which after some algebra we obtain:
+
+$$\dfrac{\dfrac{\alpha}{\beta} + E[y_{t}]}{\sqrt{var[y_{t}] + \dfrac{\sigma^{2}}{\beta^{2}}}}$$
+
+Finally we end up with:
+
+$$\dfrac{\dfrac{\alpha}{\beta} + E[y_t]}{\sqrt{(var[y_t])}}$$
+We can represent the *Sharpe* ratio as $\dfrac{\overline{x}}{\sqrt(Diag(\sigma^{2}))}$ where $\overline{x}$ is the average value of $x$ over the historic period from $t=1$ to $T$ - simply computed as $\overline{x} = \dfrac{1}{T}\sum_{t=1}^{T} D_{t}$. In R we can simply take `colMeans(all_returns) / sqrt(diag(var(all_returns)))`.
+
+#### Machine Learning and Clustering
+
+We can cluster our ETF's based on their $\beta$, $\alpha$ and $sharpe$ values. Why would we want to do this? Perhaps with more variables than the 3 here the model can cluster these firms in a higher dimensional space and thus we can select our ETF's based on the clusters and use it as a portfolio diversification tool, that is one cluster might contain riskier ETF's whereas another might contain `value` stocks or `growth` stocks. With such few variables here it doesn't quite work but with more variables we can better classifiy ETFs.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+
+betas <- CAPM.beta(Ra = all_returns, Rb = SPY_returns, Rf = 0)
+alphas <- CAPM.alpha(Ra = all_returns, Rb = SPY_returns, Rf = 0)
+sharpe <- colMeans(all_returns) / sqrt(diag(var(all_returns)))
+
+beta_alphas_sharpe <- cbind(t(betas), t(alphas), sharpe)
+colnames(beta_alphas_sharpe) <- c("beta", "alpha", "sharpe")
+beta_alphas_sharpe <- na.omit(beta_alphas_sharpe)
+library(factoextra)
+kmeans_model <- kmeans(beta_alphas_sharpe, centers = 5, iter.max = 10, nstart = 1)
+fviz_cluster(kmeans_model, data = beta_alphas_sharpe)
+```
+
+The `beta_alphas_sharpe` data looks like:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+beta_alphas_sharpe %>%
+  head() %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+We can plot the $\beta$, $\alpha$, and $sharpe$ values in a 3D plot and colour them according to the clusters from the `kmeans` model. It also gives me the opportunity to use the `threejs` package which we can interact with.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+#library(rgl)
+#options(rgl.printRglwidget = TRUE)
+#plot3d(beta_alphas_sharpe, col = kmeans_model$cluster, size=2, type='s')
+
+library(threejs)
+scatterplot3js(beta_alphas_sharpe, color = factor(kmeans_model$cluster), size = 0.5, bg = "black")
+```
+
+
+# Factor Modelling Fama and French
+
+Finally, I analyse the performance of the various ETF's. The CAPM formula tries to explain the performance of a portfolio through a sigle factor, the market as a whole. CAPM is defined as follows:
+
+$$R_{a} = R_{rf} + \beta_{a}(R_{m} - R_{rf})$$
+
+We can take the model further by adding *Factors* to the model. Thus, the 3 Factor model looks like:
+
+$$R_{a} = R_{rf} + \beta_{a}(R_{m} - R_{rf}) + \beta_{b}(SMB) + \beta_{c} HML$$
+
+Which takes the market factor from the CAPM and adds 2 new factors, the $SMB$ and $HML$ or *Small-minus-Big* and *High-minus-Low*. The $SMB$ tries to caputre the size effect, small market cap companies should outperform the market over the long run. The $HML$ aims to capture the value verses growth effect by sorting assests based on high book-to-market ratios (defined at the begining of the post). Firms which typically have a high book-to-market ratio are value stocks and low book-to-market ratios are growth stocks, the literature also shows that value stocks outperform growth stocks over the long term horizon.
+
+The Fama French factor model allows us to analyse fund managers performance, since, if an asset managers portfolio can be explained by the Fama French factors then that fund manager has not added any value through portfolio selection and skill and subseuently obtained no alpha.
+
+More formally, our equation becomes:
+
+$$X^T = a^T + B F^T + E^T$$ 
+
+Where $F$ is a matrix of factors and $B$ is a scalar of $\beta$'s such that $B = [{b_{1}, b_{2}, b_{3}]}$, in which $b_{1}$ is the market $\beta$, $b_{2}$ is the $SMB$ $\beta$ and $b_{3}$ is the $HML$ $\beta$. More formally extending to include more factors up to $N$ we have; $B = [\beta_{1}, ... , \beta_{N}]^T$
+
+We want to fit a line which minimises the squared errors such that; $minimise, \beta$  $|X^T - a^T-BF^T|_{F}^2$
+
+The solution becomes $[a, B] = X^T \widetilde{F}(\widetilde{F}^T\widetilde{F})^{-1}$ which we can solve in R using the following:
+
+(For completness I re-download the data)
+
+1) I download the data as before randomly selecting from Wikipedia and convert the daily prices to daily returns - (I set a `seed` such that we collect the same data using `set.seed`).
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+
+library(quantmod)
+library(tidyquant)
+library(timetk)
+library(rvest)
+
+start_date <- "2016-01-01"
+end_date <- "2019-11-15"
+
+
+set.seed(4746)
+url <- "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+
+symbols <- url %>%
+  read_html() %>%
+  html_nodes(xpath = '//*[@id="constituents"]') %>% 
+  html_table() %>% 
+  .[[1]] %>% 
+  filter(!str_detect(Security, "Class A|Class B|Class C")) %>%     # Removes firms with Class A shares
+  sample_n(20) %>% 
+  pull(Symbol)
+
+
+asset_returns <- tq_get(
+  symbols,
+  from = start_date,
+  to = end_date
+) %>% 
+  group_by(symbol) %>% 
+  tq_transmute(
+    select = adjusted,
+    mutate_fun = periodReturn,
+    period = "daily",
+    type = "arithmetic"
+  ) %>% 
+  select(symbol, date, daily.returns) %>% 
+  pivot_wider(names_from = symbol, values_from = daily.returns) %>% 
+  .[-1, ]
+
+```
+
+2) I download the ETFs just as before and convert to daily returns.
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+myETFs <- c("SPY", "IVV", "VTI", "VOO", "QQQ", "VEA", "IEFA", "AGG", "VWO",
+            "EFA","IEMG","VTV", "IJH", "IWF","BND", "IJR", "IWM", "VUG", 
+            "GLD", "IWD", "VIG", "VNQ", "USMV", "LQD", "VO", "VYM", "EEM",
+            "VB", "VCSH", "XLF", "VCIT", "VEU", "XLK", "ITOT", "IVW", "BNDX",
+            "VGT", "DIA", "BSV", "SHV", "IWB", "IWR", "TIP", "SCHF", "MBB", "SDY",
+            "MDY", "SCHX", "IEF", "HYG", "DVY", "XLV", "SHY", "IXUS", "TLT", "IVE",
+            "PFF", "IAU", "VXUS", "RSP", "SCHB", "VV", "GOVT", "EMB", "MUB", "QUAL",
+            "XLY", "VBR", "EWJ", "XLP", "VGK", "SPLV", "MINT", "BIV", "IGSB", "EFAV",
+            "VT", "GDX", "XLU", "IWS", "XLI", "SCHD", "IWP", "ACWI", "VMBS", "XLE", "JNK",
+            "VOE", "FLOT", "IWV", "JPST", "SCZ", "IEI", "IWN", "DGRO", "VBK", "IGIB", "IWO")
+
+
+etf_returns <- tq_get(
+  myETFs,
+  from = start_date,
+  to = end_date
+) %>% 
+  group_by(symbol) %>% 
+  tq_transmute(
+    select = adjusted,
+    mutate_fun = periodReturn,
+    period = "daily",
+    type = "arithmetic"
+  ) %>% 
+  select(symbol, date, daily.returns) %>% 
+  pivot_wider(names_from = symbol, values_from = daily.returns) %>% 
+  .[-1, ]
+```
+
+3) I take the average daily return of the randomly selected stocks and join the data with the ETFs and set the data as a time series object. I also download the daily Fama French 3 factors from Kenneth French's website and clean the data up a little.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+portfolio_and_etfs <- asset_returns %>% 
+  mutate(myPortfolio = rowMeans(select(., -date), na.rm = TRUE)) %>% 
+  select(date, myPortfolio) %>% 
+  inner_join(etf_returns, by = c("date")) %>% 
+  tk_xts(date_var = date)
+
+# Daily fama french
+library(glue)
+library(readr)
+temp <- tempfile()
+base <- "http://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/"
+factor <- "F-F_Research_Data_Factors_daily"
+format<-"_CSV.zip"
+full_url <-glue(base,factor,format,sep ="")
+download.file(full_url,temp,quiet = TRUE)
+
+North_America_3_Factors <- read_csv(unz(temp, "F-F_Research_Data_Factors_daily.CSV"), skip = 4) %>%
+  rename(date = X1) %>% 
+  mutate(date = ymd(date)) %>% 
+  drop_na(date) %>%
+  rename(Mkt_Rf_3 = `Mkt-RF`,
+         SMB_3 = SMB,
+         HML_3 = HML,
+         RF_3 = RF) %>% 
+  select(-RF_3) %>% 
+  mutate_at(vars(c("Mkt_Rf_3", "SMB_3", "HML_3")), funs(./100)) %>% 
+  tk_xts(date_var = date)
+```
+
+Finally we can compute the solution $[a, B] = X^T \widetilde{F}(\widetilde{F}^T\widetilde{F})^{-1}$
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+three_factors <- North_America_3_Factors[index(North_America_3_Factors) %in% c(min(index(portfolio_and_etfs)):max(index(North_America_3_Factors)))] # this ensures that the dates from the both time series match
+portfolio_and_etfs_new <- portfolio_and_etfs[index(portfolio_and_etfs) %in% c(min(index(three_factors))):max(index(three_factors))] # There is probably a much nicer way to go about doing this but this works...
+FF_3Factors <- cbind(alpha = 1, three_factors)
+Gamma <- t(solve(t(FF_3Factors) %*% FF_3Factors, t(FF_3Factors) %*% portfolio_and_etfs_new))
+
+```
+
+Which we can see as:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE, echo = FALSE}
+Gamma %>%
+  head() %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+Instead, we can estimate these using linear regression models. For my random portfolio `myPortfolio` we can use the `lm` function to fit a linear model and then use the `tidy` function from the `broom` package to tidy the output up a little:
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+library(broom)
+regdata <- cbind(FF_3Factors, portfolio_and_etfs_new)
+#sapply(regdata, function(x) sum(is.na(x)))   # One column was causing problems since it consisted of just NA values. I remove it below.
+regdata$JPST <- NULL      # This ETF failed to download or does not exist on the Yahoo Finance site
+
+myPortfolioReg <- lm(myPortfolio ~ Mkt_Rf_3 + SMB_3 + HML_3, data = regdata, na.action = na.exclude)
+tidy(myPortfolioReg)
+
+```
+
+We can apply this to all our ETFs in the data using the `apply` command and applying our own custom `lm` function.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+regressionLists <- apply(regdata, 2, function(y) lm(y ~ Mkt_Rf_3 + SMB_3 + HML_3, data = regdata, na.action = na.exclude))
+```
+
+We can also apply the `tidy` command to individual ETFs and then use the `stars.pval` to make the data even more tidy *~awesome~*.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+library(gtools)
+tidy(regressionLists$myPortfolio) %>% 
+  mutate(p.value = stars.pval(p.value))
+
+tidy(regressionLists$VTV)%>% 
+  mutate(p.value = stars.pval(p.value))
+
+tidy(regressionLists$LQD) %>% 
+  mutate(p.value = stars.pval(p.value))
+```
+
+Finally, we can apply this same method to all our ETFs using the `lapply` function to `tidy` the data and the `map` function to `mutate` or *convert* the p-value to *stars*. Then take a random sample of 5 ETFs regressions.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+library(purrr)
+myTidyRegressions <- lapply(regressionLists[4:length(regressionLists)], tidy)
+myTidiedRegressions <- map(myTidyRegressions, ~mutate(., p.value = stars.pval(p.value)))
+library(rlist)
+list.sample(myTidiedRegressions, 5)
+```
+
+A few notes here: We should be modelling the excess returns on the ETFs and not just the ETF returns. This is simple enough by replacing *for example* `myPortfolio` in the `lm` regressions with $(myPortfolio - RF_3)$ where $RF_3$ is the risk free rate which comes with the Fama and French data. We should also probably use $NeweyWest$ adjusted standard errors by running `coeftest(myPortfolioReg, NeweyWest(myPortfolioReg, lag = N, prewhite = FALSE))`. Literature suggests that lags of $4(N/100)^{2/9}$ should be used, where $N$ is the number of observations. 
+We could rank the ETFs based on their alphas as before and go *long* on the high alphas and *short* on the low alphas. Run our hedge portfolio through a Fama French regression here and see if we are able to obtain better performances.
+
+Finally, here I only used the 3 Factor model. There are more factors from the literature we could use. On the Kenneth French website we can collect data on  $Market$, $SMB$, $HML$, $RMW$, $CMA$ and $MOM$. Where the $RMW$ factor is a profitability factor, the $CMA$ is an investment factor and the $MOM$ is a momentum factor.
+
+Below I pull in the daily Fama and French 5 Factor model and plot them.
+
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+library(glue)
+library(timetk)
+library(plotly)
+library(pipeR)
+
+temp <- tempfile()
+base <- "http://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/"
+factor <- "North_America_5_Factors"
+format<-"_CSV.zip"
+full_url <-glue(base,factor,format,sep ="")
+download.file(full_url,temp,quiet = TRUE)
+
+North_America_Factors <- read_csv(unz(temp, "North_America_5_Factors.csv"), skip = 6) %>%
+  rename(date = X1) %>%
+  mutate_at(vars(-date), as.numeric) %>%
+  mutate(date = rollback(ymd(parse_date_time(date, "%Y%m") + months(1)))) %>%
+  drop_na(date) %>%
+  rename(Mkt_Rf = `Mkt-RF`) %>% 
+  select(-RF) %>% 
+  mutate_at(vars(c("Mkt_Rf", "SMB", "HML", "RMW", "CMA")), funs(./100)) %>% 
+  tk_xts(date_var = date)
+
+ax <- list(
+  zeroline = TRUE,
+  showline = TRUE,
+  mirror = "ticks",
+  gridcolor = toRGB('white'),
+  gridwidth = 2,
+  zerolinecolor = toRGB('white'),
+  zerolinewidth = 4,
+  linecolor = toRGB('white'),
+  linewidth = 6,
+  color = 'white'
+)
+
+
+North_America_Factors %>>% 
+  (cumprod(1+.)) %>>%
+  ROC(36, type = "discrete") %>>%
+  na.omit() %>>% 
+  (
+    plot_ly(
+      x = colnames(.),
+      y = as.Date(index(.)),
+      z = data.matrix(.),
+      type = "surface",
+      colors = c("darkblue", "yellow", "darkred")
+    )
+  ) %>%
+  plotly::layout(
+    xaxis = ax, yaxis = ax,
+    paper_bgcolor ='rgb(0,0,0)',
+    #plot_bgcolor ='rgb(0,0,0)',
+    title = "Fama French Factors",
+    scene = list(
+      xaxis = c(ax, title = "Factors", tickangle = -45),
+      yaxis = c(ax, title = "Date", tickangle = -45),
+      zaxis = c(ax, title = "Fama French Factor")
+    ),
+    titlefont = list(
+      family = "Agency FB",
+      size = 50,
+      color = 'white')
+  )
+```

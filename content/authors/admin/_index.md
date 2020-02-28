@@ -18,8 +18,8 @@ interests:
 name: Matthew Smith
 organizations:
 - name: IESE Business School
-  url: ""
-role: Researcher
+  url: "https://www.iese.edu/"
+role: Researcher in Dept Finance
 social:
 - icon: envelope
   icon_pack: fas
@@ -39,4 +39,6 @@ user_groups:
 - Visitors
 ---
 
-I focus my research on machine learning applications applied to economics but in my spare time I generally enjoy playing around with different R packages. I set up this blog as a way to highlight my research results, organise my code and publish it along with comments for others to use.
+My research focuses on machine learning applications applied to economics but in my spare time I generally enjoy playing around with different R packages and finding applications to finance and economics. I set up this blog as a way to highlight my research results, organise my code and publish it along with comments.
+
+*Nothing in life is to be feared, it is only to be understood. Now is the time to understand more, so that we may fear less. - Marie Skłodowska Curie*

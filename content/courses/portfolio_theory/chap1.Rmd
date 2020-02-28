@@ -1,0 +1,42 @@
+---
+date: "2019-05-05T00:00:00+01:00"
+draft: false
+linktitle: Market Efficiency
+menu:
+  portfolio_theory:
+    parent: Portfolio Theory
+    weight: 1
+title: Market Efficiency
+toc: true
+type: docs
+weight: 1
+bibliography: mybibml.bib
+link-citations: yes
+---
+
+## Introduction to efficient markets
+
+Each market participant participant has differing views on what data is telling them. The market is thus a weighted average of investor views. In *efficient markets* all relevant information is reflected in the current share price of a stock.
+
+@malkiel1970efficient suggested 3 types of market efficiency
+
+* *Weak form*: In which the current market price reflects **all information contained in past prices**
+* *Semi-strong form*: In which the current price reflects **all publically avalable information**
+* *Strong form*: In which the current price relects **all information, regardless of whether the information is public or not**
+
+## Random Walk
+
+A random walk in the context of finance suggests that changes in stock prices have the same distribution and are independent of each other and thus past stock prices cannot be used to predict the future price or movement. That is, stock prices take a random and unpredictable path.
+
+Let $\epsilon_{t+1}$ be a sequence of independently and identically distributed (i.i.d) random variables with an expected value of 0. Then, $P_{t+1} = P_{t} + \epsilon_{t+1}$ is a random walk and $P_{t+1} = P_{t} + \mu + \epsilon_{t+1}$ is a random walk with a drift component $\mu > 0$.
+
+Market efficiency implies that prices reflect all current available information. As new information is made public then prices will adjust accordingly. We cannot predict this new information but we can take expectations such that, $E(P_{t+1}) = P_{t} + E(\epsilon_{t+1})$ where $\epsilon_{t+1}$ is expected news about a given stock. The $E(\epsilon_{t+1}) = 0$ so $E(P_{t+1}) = P_{t}$ but investors should obtain some compensation for bearing risk which is reflected in $\mu$, therefore $E(P_{t+1}) = P_{t} + \mu + E(\epsilon_{t+1})$ becomes $E(P_{t+1}) = P_{t} + \mu$ with $E(\epsilon_{t+1})$ = 0.
+
+There are a few market phenomena that researchers and academics try to answer, the  *value premium* and *momentum premium*.
+
+* **Value**: @fama1966filter and @alexander1961price studied that some strategies can make money when transaction costs are not accounted for. Empirical findings have found that *value* stocks (stocks with a high **book-to-market** ratio) outperform *growth* stocks (stocks with a low **book-to-market** ratio) @fama1992cross. Tech stocks are usually *growth* stocks and have a low **book value** since much of their value is in interlectual property and not in industrial/manufacturing plants, thus they have a lower relative **book value** compared to their **market value**. *Value* stocks have a high book value relative to market value and would be manufacturing plants with large *fixed assets* pushing the *book value* up.
+
+* **Momentum**: Past winners outperform past losers over a time period of  3 - 12 months @wermers1997momentum.
+
+Both premiums imply that markets are inefficient. Not all stocks are correctly priced all the time. Some stocks are overpriced whilst other stocks are underpriced, however on average stocks are correctly priced.
+

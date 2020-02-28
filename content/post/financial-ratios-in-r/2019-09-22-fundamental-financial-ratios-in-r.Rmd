@@ -26,6 +26,16 @@ library(tidyr)
 library(quantmod)
 ```
 
+```{r, include = TRUE, message = FALSE, warning = FALSE}
+library(knitr)
+library(kableExtra)
+library(tidyquant)
+library(directlabels)
+library(tibble)
+library(tidyr)
+library(quantmod)
+```
+
 I developed a model to collect financial information from Yahoo Finance, I wanted to use this model to understand a little better how to analyse comanies, what ratios are important and to see how companies performances differ from each other.
 
 ```{r, include = TRUE, message = FALSE, warning = FALSE}

@@ -11,7 +11,7 @@
 [[main]]
   name = "Posts"
   url = "#posts"
-  weight = 20
+  weight = 1
 
 #[[main]]
 #  name = "Projects"
@@ -26,12 +26,60 @@
 [[main]]
   name = "Courses"
   url = "courses/"
-  weight = 50
+  weight = 2
 
 [[main]]
   name = "Contact"
   url = "#contact"
-  weight = 60
+  weight = 3
+
+[[main]]
+  identifier = "Blogroll"
+  name = "Blogroll"
+  url = "/Blogroll/"
+  weight = "4"
+
+[[main]]
+  parent = "Blogroll"
+  name = "LinkedIn"
+  identifier = "LinkedIn"
+  url = "https://www.linkedin.com/in/msmithsm14/"
+  weight = "1"
+
+[[main]]
+  parent = "Blogroll"
+  name = "R-bloggers"
+  identifier = "R-bloggers"
+  url = "https://www.r-bloggers.com"
+  weight = "2"
+
+[[main]]
+  parent = "Blogroll"
+  name = "Quantocracy"
+  identifier = "Quantocracy"
+  url = "https://quantocracy.com/"
+  weight = "3"
+
+[[main]]
+  parent = "Blogroll"
+  name = "Top 40 R Blogs"
+  identifier = "Top_40_R_Programming_Blogs"
+  url = "https://blog.feedspot.com/r_programming_blogs/"
+  weight = "4"
+  
+[[main]]
+parent = "Blogroll"
+name = "R Weekly"
+identifier = "R_Weekly"
+url = "https://rweekly.org/"
+weight = "5"
+  
+[[main]]
+parent = "Blogroll"
+name = "Quantpedia"
+identifier = "Quantpedia"
+url = "https://quantpedia.com/blog/"
+weight = "6"
 
 # Link to a PDF of your resume/CV from the menu.
 # To enable, copy your resume/CV to `static/files/cv.pdf` and uncomment the lines below.
